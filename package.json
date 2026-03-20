@@ -13,6 +13,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.80.0",
     "@google/generative-ai": "^0.24.1",
     "@pinecone-database/pinecone": "^7.1.0",
     "@supabase/supabase-js": "^2.99.3",

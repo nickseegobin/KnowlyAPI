@@ -1,11 +1,21 @@
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const Anthropic = require('@anthropic-ai/sdk');
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+let client = null;
+
+function getClient() {
+  if (!client) {
+    client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  }
+  return client;
+}
 
 async function generateContent(prompt) {
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
-  const result = await model.generateContent(prompt);
-  return result.response.text();
+  const message = await getClient().messages.create({
+    model: 'claude-sonnet-4-5',
+    max_tokens: 8000,
+    messages: [{ role: 'user', content: prompt }],
+  });
+  return message.content[0].text;
 }
 
 module.exports = { generateContent };
