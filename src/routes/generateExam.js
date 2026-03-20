@@ -1,8 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
-const supabase = require('../config/supabase');
 const { generateExamPackage } = require('../services/examGenerator');
+const getSupabase = require('../config/supabase');
 
 router.post('/', authenticateToken, async (req, res) => {
   const { standard, term, subject, difficulty, user_id, completed_package_ids = [] } = req.body;
@@ -17,9 +17,9 @@ router.post('/', authenticateToken, async (req, res) => {
 
   try {
     // 1. POOL QUERY — find an approved undelivered package
-    let query = supabase
+    let query = getSupabase()
       .from('exam_pool')
-      .select('package_id, package_data, meta:package_data->meta')
+      .select('package_id, package_data')
       .eq('standard', standard)
       .eq('subject', subject)
       .eq('difficulty', difficulty)
@@ -42,14 +42,13 @@ router.post('/', authenticateToken, async (req, res) => {
     if (poolResults && poolResults.length > 0) {
       // POOL HIT
       const pkg = poolResults[0];
+      const packageData = pkg.package_data;
 
       // Increment times_served
-      await supabase
+      await getSupabase()
         .from('exam_pool')
-        .update({ times_served: supabase.rpc('increment', { row_id: pkg.package_id }) })
+        .update({ times_served: (packageData.times_served || 0) + 1 })
         .eq('package_id', pkg.package_id);
-
-      const packageData = pkg.package_data;
 
       // Strip answer sheet
       const { answer_sheet, ...safePackage } = packageData;
@@ -67,7 +66,7 @@ router.post('/', authenticateToken, async (req, res) => {
     const { packageData, fingerprints } = await generateExamPackage({ standard, term, subject, difficulty });
 
     // 3. STORE in exam_pool
-    const { error: insertError } = await supabase
+    const { error: insertError } = await getSupabase()
       .from('exam_pool')
       .insert({
         package_id: packageData.package_id,
@@ -103,7 +102,9 @@ router.post('/', authenticateToken, async (req, res) => {
       correct_answer: q.correct_answer,
     }));
 
-    await supabase.from('question_bank').upsert(questionRows, { onConflict: 'question_id' });
+    await getSupabase()
+      .from('question_bank')
+      .upsert(questionRows, { onConflict: 'question_id' });
 
     // 5. RETURN — strip answer sheet
     return res.json({

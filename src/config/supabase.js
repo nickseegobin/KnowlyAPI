@@ -12,4 +12,4 @@ function getSupabase() {
   return client;
 }
 
-module.exports = getSupabase();
+module.exports = getSupabase;
