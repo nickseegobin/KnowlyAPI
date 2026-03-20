@@ -8,6 +8,10 @@ app.use(express.json());
 const healthRouter = require('./routes/health');
 app.use('/api/v1/health', healthRouter);
 
+// after the health route
+const generateExamRouter = require('./routes/generateExam');
+app.use('/api/v1/generate-exam', generateExamRouter);
+
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
