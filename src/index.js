@@ -1,4 +1,6 @@
-require('dotenv').config();
+if (process.env.NODE_ENV !== 'production') {
+  require('dotenv').config();
+}
 const express = require('express');
 const app = express();
 
@@ -8,7 +10,6 @@ app.use(express.json());
 const healthRouter = require('./routes/health');
 app.use('/api/v1/health', healthRouter);
 
-// after the health route
 const generateExamRouter = require('./routes/generateExam');
 app.use('/api/v1/generate-exam', generateExamRouter);
 
