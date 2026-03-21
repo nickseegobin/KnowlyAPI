@@ -14,6 +14,8 @@ const checkpointRouter = require('./routes/checkpoint');
 const resumeExamRouter = require('./routes/resumeExam');
 const cancelExamRouter = require('./routes/cancelExam');
 const insightRouter = require('./routes/insight');
+const progressRouter = require('./routes/progress');
+
 
 
 app.use('/api/v1/health', healthRouter);
@@ -23,6 +25,7 @@ app.use('/api/v1/checkpoint', checkpointRouter);
 app.use('/api/v1/resume-exam', resumeExamRouter);
 app.use('/api/v1/cancel-exam', cancelExamRouter);
 app.use('/api/v1/insight', insightRouter);
+app.use('/api/v1/progress', progressRouter);
 
 // 404 handler
 app.use((req, res) => {
