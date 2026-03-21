@@ -8,10 +8,18 @@ app.use(express.json());
 
 // Routes
 const healthRouter = require('./routes/health');
-app.use('/api/v1/health', healthRouter);
-
 const generateExamRouter = require('./routes/generateExam');
+const submitExamRouter = require('./routes/submitExam');
+const checkpointRouter = require('./routes/checkpoint');
+const resumeExamRouter = require('./routes/resumeExam');
+const cancelExamRouter = require('./routes/cancelExam');
+
+app.use('/api/v1/health', healthRouter);
 app.use('/api/v1/generate-exam', generateExamRouter);
+app.use('/api/v1/submit-exam', submitExamRouter);
+app.use('/api/v1/checkpoint', checkpointRouter);
+app.use('/api/v1/resume-exam', resumeExamRouter);
+app.use('/api/v1/cancel-exam', cancelExamRouter);
 
 // 404 handler
 app.use((req, res) => {
