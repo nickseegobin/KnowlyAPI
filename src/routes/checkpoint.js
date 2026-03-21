@@ -4,7 +4,7 @@ const { authenticateToken } = require('../middleware/auth');
 const getSupabase = require('../config/supabase');
 
 router.post('/', authenticateToken, async (req, res) => {
-  const { session_id, user_id, package_id, current_question_index, time_remaining_seconds, answers_so_far } = req.body;
+  const { session_id, user_id, package_id, current_question_index, time_remaining_seconds, answers_so_far, standard, term, subject, difficulty } = req.body;
 
   if (!session_id || !user_id || !package_id) {
     return res.status(400).json({ error: 'Missing required fields' });
@@ -17,6 +17,10 @@ router.post('/', authenticateToken, async (req, res) => {
         session_id,
         user_id,
         package_id,
+        standard: standard || 'std_4',
+        term: term || null,
+        subject: subject || 'unknown',
+        difficulty: difficulty || 'medium',
         state: 'active',
         time_remaining: time_remaining_seconds,
         checkpoint_data: {
