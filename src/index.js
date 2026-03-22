@@ -16,8 +16,7 @@ const cancelExamRouter = require('./routes/cancelExam');
 const insightRouter = require('./routes/insight');
 const progressRouter = require('./routes/progress');
 const catalogueRouter = require('./routes/catalogue');
-
-
+const poolRouter = require('./routes/pool');
 
 
 app.use('/api/v1/health', healthRouter);
@@ -29,6 +28,7 @@ app.use('/api/v1/cancel-exam', cancelExamRouter);
 app.use('/api/v1/insight', insightRouter);
 app.use('/api/v1/progress', progressRouter);
 app.use('/api/v1/catalogue', catalogueRouter);
+app.use('/api/v1/pool', poolRouter);
 
 // 404 handler
 app.use((req, res) => {
