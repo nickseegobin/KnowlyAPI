@@ -17,6 +17,8 @@ const insightRouter = require('./routes/insight');
 const progressRouter = require('./routes/progress');
 const catalogueRouter = require('./routes/catalogue');
 const poolRouter = require('./routes/pool');
+const overallInsightRouter = require('./routes/overallInsight');
+
 
 
 app.use('/api/v1/health', healthRouter);
@@ -29,6 +31,7 @@ app.use('/api/v1/insight', insightRouter);
 app.use('/api/v1/progress', progressRouter);
 app.use('/api/v1/catalogue', catalogueRouter);
 app.use('/api/v1/pool', poolRouter);
+app.use('/api/v1/overall-insight', overallInsightRouter);
 
 // 404 handler
 app.use((req, res) => {

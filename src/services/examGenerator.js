@@ -59,6 +59,32 @@ function buildTopicList(topics) {
   ).join('\n');
 }
 
+function shuffleArray(array) {
+  const arr = [...array];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function shuffleQuestions(questions) {
+  const shuffled = shuffleArray(questions);
+  // Reassign question_ids sequentially after shuffle
+  return shuffled.map((q, index) => ({
+    ...q,
+    question_id: `q_${String(index + 1).padStart(3, '0')}`
+  }));
+}
+
+function buildAnswerSheet(questions) {
+  return questions.map(q => ({
+    question_id: q.question_id,
+    correct_answer: q.correct_answer,
+    explanation: q.explanation || ''
+  }));
+}
+
 async function generateExamPackage({ standard, term, subject, difficulty }) {
   const config = EXAM_CONFIG[standard][difficulty];
   const topics = getTopicsForExam(standard, subject, term);
@@ -82,11 +108,16 @@ ${curriculumChunks ? `\nCURRICULUM NOTES:\n${curriculumChunks.slice(0, 800)}\n` 
 RULES:
 1. Exactly ${config.question_count} questions, 4 options each (A/B/C/D)
 2. One correct answer per question
-3. Use Caribbean names and contexts (Marcus, Keisha, Rajiv, Asha, etc.)
+3. Use Caribbean names and contexts (Marcus, Keisha, Rajiv, Asha, Dario, Shantel, etc.)
 4. Each question needs: question_id, meta (topic, subtopic, cognitive_level, difficulty_weight, time_limit_seconds), question, options, correct_answer, explanation, tip
 5. tip = specific hint for THIS question that guides thinking without revealing the answer
 6. explanation = why the correct answer is right (shown after submission)
-7. Distribute questions across all topics listed
+7. Distribute questions across ALL topics listed
+8. SPECIAL CONTENT CODES — use these in question text when appropriate:
+   - [hide]word[/hide] — hides a word for spelling/fill-in questions (shown as blank or underline in UI)
+   - [blank] — omits a word entirely for fill-in-the-blank questions
+   - [emphasize]text[/emphasize] — highlights a key term or word
+9. Do NOT number questions sequentially by topic — mix topics throughout the question list
 
 Return this exact structure:
 {
@@ -108,35 +139,17 @@ Return this exact structure:
     "source": "generated",
     "uniqueness_score": null
   },
-  "questions": [
-    {
-      "question_id": "q_001",
-      "meta": {
-        "topic": "Topic name",
-        "subtopic": "Subtopic name",
-        "cognitive_level": "knowledge",
-        "difficulty_weight": 1,
-        "time_limit_seconds": ${config.time_per_question_seconds}
-      },
-      "question": "Question text?",
-      "options": {"A": "...", "B": "...", "C": "...", "D": "..."},
-      "correct_answer": "A",
-      "explanation": "Why A is correct.",
-      "tip": "Specific thinking hint for this question without revealing the answer."
-    }
-  ],
-  "answer_sheet": [
-    {
-      "question_id": "q_001",
-      "correct_answer": "A",
-      "explanation": "Why A is correct."
-    }
-  ]
+  "questions": [],
+  "answer_sheet": []
 }`;
 
   const rawResponse = await generateContent(prompt);
   const cleaned = rawResponse.replace(/```json|```/g, '').trim();
   const packageData = JSON.parse(cleaned);
+
+  // Shuffle questions and rebuild answer_sheet to match
+  packageData.questions = shuffleQuestions(packageData.questions);
+  packageData.answer_sheet = buildAnswerSheet(packageData.questions);
 
   // Fingerprints and uniqueness
   let passCount = 0;

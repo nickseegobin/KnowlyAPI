@@ -2,17 +2,16 @@ const express = require('express');
 const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
 const { generateExamPackage } = require('../services/examGenerator');
+const { checkAndRefill } = require('../services/bufferManager');
 const getSupabase = require('../config/supabase');
 
 router.post('/', authenticateToken, async (req, res) => {
-  const { standard, term, subject, difficulty, user_id, completed_package_ids = [] } = req.body;
+  const { standard, term, subject, difficulty, completed_package_ids = [] } = req.body;
 
-  // Change 1: user_id no longer required
   if (!standard || !subject || !difficulty) {
     return res.status(400).json({ error: 'Missing required fields: standard, subject, difficulty' });
   }
 
-  // Change 2: server-to-server mode
   const serverKey = req.headers['x-aep-server-key'];
   const isServerRequest = serverKey && serverKey === process.env.AEP_SERVER_KEY;
 
@@ -33,7 +32,6 @@ router.post('/', authenticateToken, async (req, res) => {
     const { data: poolPackages, error: poolError } = await query;
 
     if (!poolError && poolPackages && poolPackages.length > 0) {
-      // Filter out completed packages
       const available = poolPackages.filter(p => !completed_package_ids.includes(p.package_id));
 
       if (available.length > 0) {
@@ -48,6 +46,9 @@ router.post('/', authenticateToken, async (req, res) => {
 
         console.log(`Pool hit: ${selected.package_id}`);
 
+        // Fire buffer check in background
+        setImmediate(() => checkAndRefill({ standard, term, subject, difficulty }));
+
         const responsePackage = isServerRequest
           ? { ...packageData, source: 'pool' }
           : (({ answer_sheet, ...safe }) => ({ ...safe, source: 'pool' }))(packageData);
@@ -56,11 +57,11 @@ router.post('/', authenticateToken, async (req, res) => {
       }
     }
 
-    // Generate new package
+    // No pool package available — generate new one
     console.log(`Generating new exam: ${standard} ${term} ${subject} ${difficulty}`);
     const { packageData, fingerprints } = await generateExamPackage({ standard, term, subject, difficulty });
 
-    // Store in exam_pool
+    // Store in exam_pool as pending_review (manual generation stays pending)
     await getSupabase().from('exam_pool').insert({
       package_id: packageData.package_id,
       standard,
@@ -75,7 +76,7 @@ router.post('/', authenticateToken, async (req, res) => {
       source: 'generated',
     });
 
-    // Store fingerprints in question_bank
+    // Store fingerprints
     if (fingerprints?.length > 0) {
       const rows = fingerprints.map(f => ({
         package_id: packageData.package_id,
@@ -90,6 +91,9 @@ router.post('/', authenticateToken, async (req, res) => {
       }));
       await getSupabase().from('question_bank').insert(rows);
     }
+
+    // Fire buffer check in background
+    setImmediate(() => checkAndRefill({ standard, term, subject, difficulty }));
 
     const responsePackage = isServerRequest
       ? { ...packageData, source: 'generated' }
