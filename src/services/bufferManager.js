@@ -13,7 +13,7 @@ async function checkAndRefill({ standard, term, subject, difficulty }) {
       .eq('subject', subject)
       .eq('difficulty', difficulty)
       .eq('status', 'approved')
-      .gt('times_served', 0);
+      .eq('times_served', 0);
 
     if (term) query = query.eq('term', term);
 
