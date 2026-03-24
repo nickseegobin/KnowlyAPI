@@ -71,7 +71,7 @@ router.post('/', authenticateToken, async (req, res) => {
       question_count: packageData.questions?.length || 0,
       topics_covered: packageData.meta?.topics_covered || [],
       package_data: packageData,
-      status: 'pending_review',
+      status: 'approved',
       uniqueness_score: packageData.meta?.uniqueness_score || 1,
       source: 'generated',
     });
