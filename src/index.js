@@ -18,6 +18,8 @@ const progressRouter = require('./routes/progress');
 const catalogueRouter = require('./routes/catalogue');
 const poolRouter = require('./routes/pool');
 const overallInsightRouter = require('./routes/overallInsight');
+const editorReadRouter = require('./routes/editorRead');
+const editorSaveRouter = require('./routes//editorSave');
 
 
 
@@ -32,6 +34,8 @@ app.use('/api/v1/progress', progressRouter);
 app.use('/api/v1/catalogue', catalogueRouter);
 app.use('/api/v1/pool', poolRouter);
 app.use('/api/v1/overall-insight', overallInsightRouter);
+app.use('/api/v1/editor-read', editorReadRouter);
+app.use('/api/v1/editor-save', editorSaveRouter);
 
 // 404 handler
 app.use((req, res) => {
