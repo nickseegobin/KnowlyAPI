@@ -13,6 +13,114 @@ function requireServerKey(req, res) {
   return true;
 }
 
+// POST /api/v1/leaderboard/upsert  (WordPress server-to-server)
+router.post('/upsert', async (req, res) => {
+  if (!requireServerKey(req, res)) return;
+
+  const { user_id, standard, subject, points, score_pct, term, difficulty } = req.body;
+
+  // Required field validation
+  const missing = ['user_id', 'standard', 'subject', 'points', 'score_pct', 'session_id'].filter(f => {
+    const v = req.body[f];
+    return v === undefined || v === null || v === '';
+  });
+  if (missing.length) {
+    return res.status(400).json({ error: `Missing required fields: ${missing.join(', ')}` });
+  }
+  if (!term && standard === 'std_4') {
+    return res.status(400).json({ error: 'term is required for std_4' });
+  }
+
+  try {
+    // Resolve nickname
+    const { data: profile, error: profileError } = await getSupabase()
+      .from('user_profiles')
+      .select('nickname')
+      .eq('user_id', user_id)
+      .single();
+
+    if (profileError || !profile) {
+      return res.status(404).json({ error: 'User profile not found — nickname not generated yet' });
+    }
+
+    const nickname = profile.nickname;
+    const entry_date = getTrinidadDate();
+    const board_key = getBoardKey(standard, term || null, subject);
+    const normTerm = term || '';
+
+    // Fetch existing entry to get previous total (for previous_rank and accumulation)
+    const { data: existing } = await getSupabase()
+      .from('leaderboard_entries')
+      .select('total_points')
+      .eq('user_id', user_id)
+      .eq('standard', standard)
+      .eq('term', normTerm)
+      .eq('subject', subject)
+      .eq('entry_date', entry_date)
+      .single();
+
+    const previous_total = existing?.total_points || 0;
+    const new_total = previous_total + points;
+
+    // Previous rank (before this exam's points were added)
+    let previous_rank = null;
+    if (existing) {
+      const { count: abovePrev } = await getSupabase()
+        .from('leaderboard_entries')
+        .select('id', { count: 'exact', head: true })
+        .eq('standard', standard)
+        .eq('term', normTerm)
+        .eq('subject', subject)
+        .eq('entry_date', entry_date)
+        .gt('total_points', previous_total);
+      previous_rank = (abovePrev || 0) + 1;
+    }
+
+    // Upsert — accumulate at app level (equivalent to ON CONFLICT DO UPDATE total_points + EXCLUDED)
+    const { error: upsertError } = await getSupabase()
+      .from('leaderboard_entries')
+      .upsert({
+        user_id,
+        nickname,
+        standard,
+        term: normTerm,
+        subject,
+        difficulty: difficulty || null,
+        board_key,
+        total_points: new_total,
+        last_score_pct: score_pct,
+        entry_date,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'user_id,standard,term,subject,entry_date' });
+
+    if (upsertError) throw upsertError;
+
+    // New rank after upsert
+    const { count: aboveNew } = await getSupabase()
+      .from('leaderboard_entries')
+      .select('id', { count: 'exact', head: true })
+      .eq('standard', standard)
+      .eq('term', normTerm)
+      .eq('subject', subject)
+      .eq('entry_date', entry_date)
+      .gt('total_points', new_total);
+
+    const new_rank = (aboveNew || 0) + 1;
+
+    return res.json({
+      was_updated: true,
+      total_points_today: new_total,
+      previous_rank,
+      new_rank,
+      board_key
+    });
+
+  } catch (err) {
+    console.error('[leaderboard/upsert] error:', err.message, err.stack);
+    return res.status(500).json({ error: 'Failed to upsert leaderboard entry', details: err.message });
+  }
+});
+
 // GET /api/v1/leaderboard/:standard/:term/:subject
 router.get('/:standard/:term/:subject', async (req, res) => {
   const { standard, subject } = req.params;
