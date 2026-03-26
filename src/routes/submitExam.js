@@ -100,6 +100,7 @@ router.post('/', authenticateToken, async (req, res) => {
     // Sync leaderboard upsert — non-fatal
     let leaderboard_update = null;
     try {
+
       leaderboard_update = await upsertLeaderboardEntry({
         user_id,
         standard: packageData.meta?.standard,
@@ -107,7 +108,6 @@ router.post('/', authenticateToken, async (req, res) => {
         subject: packageData.meta?.subject,
         difficulty: packageData.meta?.difficulty,
         correct_count: score,
-        total_questions: total,
         score_pct: percentage
       });
     } catch (err) {

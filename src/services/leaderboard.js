@@ -7,9 +7,8 @@ function getTrinidadDate() {
   return trinidad.toISOString().split('T')[0];
 }
 
-function getBoardKey(standard, term, subject, difficulty) {
-  const parts = [standard, term, subject, difficulty].filter(Boolean);
-  return parts.join('_');
+function getBoardKey(standard, term, subject) {
+  return [standard, term, subject].filter(Boolean).join('_');
 }
 
 function calcPoints(correct_count, difficulty) {
@@ -44,15 +43,14 @@ Return ONLY the nickname, nothing else.`;
     existingNicknames.push(nickname);
   }
 
-  // Fallback: append 2-digit random number
   const base = await generateContent(`Generate a single fun Caribbean-flavoured nickname for a primary school student. One word, 6-10 chars, child-safe. Return ONLY the nickname.`);
   const clean = base.trim().replace(/\s+/g, '').replace(/[^a-zA-Z]/g, '');
   return clean + String(Math.floor(Math.random() * 90) + 10);
 }
 
-async function upsertLeaderboardEntry({ user_id, standard, term, subject, difficulty, correct_count, total_questions, score_pct }) {
+async function upsertLeaderboardEntry({ user_id, standard, term, subject, difficulty, correct_count, score_pct }) {
   const entry_date = getTrinidadDate();
-  const board_key = getBoardKey(standard, term, subject, difficulty);
+  const board_key = getBoardKey(standard, term, subject);
   const new_points = calcPoints(correct_count, difficulty);
 
   // Get profile for nickname
@@ -64,55 +62,69 @@ async function upsertLeaderboardEntry({ user_id, standard, term, subject, diffic
 
   const nickname = profile?.nickname || `User${user_id}`;
 
-  // Get existing entry for today
+  // Get previous rank before upsert
   const { data: existing } = await getSupabase()
     .from('leaderboard_entries')
-    .select('best_points, id')
+    .select('total_points')
     .eq('user_id', user_id)
     .eq('standard', standard)
     .eq('term', term || '')
     .eq('subject', subject)
-    .eq('difficulty', difficulty)
     .eq('entry_date', entry_date)
     .single();
 
-  const previous_best_points = existing?.best_points || 0;
-  const was_personal_best = !existing || new_points > previous_best_points;
-
-  if (was_personal_best) {
-    await getSupabase()
+  let previous_rank = null;
+  if (existing) {
+    const { count: above } = await getSupabase()
       .from('leaderboard_entries')
-      .upsert({
-        user_id,
-        nickname,
-        standard,
-        term: term || null,
-        subject,
-        difficulty,
-        board_key,
-        best_points: new_points,
-        best_score_pct: score_pct,
-        correct_count,
-        total_questions,
-        entry_date,
-        updated_at: new Date().toISOString()
-      }, { onConflict: 'user_id,standard,term,subject,difficulty,entry_date' });
+      .select('id', { count: 'exact', head: true })
+      .eq('standard', standard)
+      .eq('term', term || '')
+      .eq('subject', subject)
+      .eq('entry_date', entry_date)
+      .gt('total_points', existing.total_points);
+    previous_rank = (above || 0) + 1;
   }
 
-  // Get rank
-  const { count: above } = await getSupabase()
+  // Accumulate points
+  const previous_total = existing?.total_points || 0;
+  const new_total = previous_total + new_points;
+
+  await getSupabase()
+    .from('leaderboard_entries')
+    .upsert({
+      user_id,
+      nickname,
+      standard,
+      term: term || null,
+      subject,
+      difficulty,
+      board_key,
+      total_points: new_total,
+      last_score_pct: score_pct,
+      entry_date,
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'user_id,standard,term,subject,entry_date' });
+
+  // Get new rank after upsert
+  const { count: newAbove } = await getSupabase()
     .from('leaderboard_entries')
     .select('id', { count: 'exact', head: true })
     .eq('standard', standard)
     .eq('term', term || '')
     .eq('subject', subject)
-    .eq('difficulty', difficulty)
     .eq('entry_date', entry_date)
-    .gt('best_points', new_points);
+    .gt('total_points', new_total);
 
-  const new_rank = (above || 0) + 1;
+  const new_rank = (newAbove || 0) + 1;
 
-  return { points_earned: new_points, board_key, new_rank, was_personal_best, previous_best_points };
+  return {
+    was_updated: true,
+    total_points_today: new_total,
+    previous_rank,
+    new_rank,
+    board_key
+  };
 }
 
 module.exports = { getTrinidadDate, getBoardKey, calcPoints, generateNickname, upsertLeaderboardEntry };

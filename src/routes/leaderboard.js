@@ -4,14 +4,13 @@ const { authenticateToken } = require('../middleware/auth');
 const getSupabase = require('../config/supabase');
 const { getTrinidadDate, getBoardKey, generateNickname, upsertLeaderboardEntry } = require('../services/leaderboard');
 
-// GET /api/v1/leaderboard/:standard/:term/:subject/:difficulty
-router.get('/:standard/:term/:subject/:difficulty', async (req, res) => {
-  const { standard, subject, difficulty } = req.params;
+// GET /api/v1/leaderboard/:standard/:term/:subject
+router.get('/:standard/:term/:subject', async (req, res) => {
+  const { standard, subject } = req.params;
   const term = req.params.term === 'none' ? null : req.params.term;
   const entry_date = getTrinidadDate();
-  const board_key = getBoardKey(standard, term, subject, difficulty);
+  const board_key = getBoardKey(standard, term, subject);
 
-  // Try to get user_id from JWT if present
   let requesting_user_id = null;
   try {
     const authHeader = req.headers.authorization;
@@ -26,13 +25,12 @@ router.get('/:standard/:term/:subject/:difficulty', async (req, res) => {
   try {
     const { data: entries, error } = await getSupabase()
       .from('leaderboard_entries')
-      .select('user_id, nickname, best_points, best_score_pct, correct_count, total_questions')
+      .select('user_id, nickname, total_points, last_score_pct')
       .eq('standard', standard)
       .eq('term', term || '')
       .eq('subject', subject)
-      .eq('difficulty', difficulty)
       .eq('entry_date', entry_date)
-      .order('best_points', { ascending: false })
+      .order('total_points', { ascending: false })
       .limit(10);
 
     if (error) throw error;
@@ -43,10 +41,8 @@ router.get('/:standard/:term/:subject/:difficulty', async (req, res) => {
       .eq('standard', standard)
       .eq('term', term || '')
       .eq('subject', subject)
-      .eq('difficulty', difficulty)
       .eq('entry_date', entry_date);
 
-    // Get my_position if user not in top 10
     let my_position = null;
     if (requesting_user_id) {
       const userInTop = entries?.findIndex(e => e.user_id === requesting_user_id);
@@ -55,12 +51,11 @@ router.get('/:standard/:term/:subject/:difficulty', async (req, res) => {
       } else {
         const { data: myEntry } = await getSupabase()
           .from('leaderboard_entries')
-          .select('best_points')
+          .select('total_points')
           .eq('user_id', requesting_user_id)
           .eq('standard', standard)
           .eq('term', term || '')
           .eq('subject', subject)
-          .eq('difficulty', difficulty)
           .eq('entry_date', entry_date)
           .single();
 
@@ -71,9 +66,8 @@ router.get('/:standard/:term/:subject/:difficulty', async (req, res) => {
             .eq('standard', standard)
             .eq('term', term || '')
             .eq('subject', subject)
-            .eq('difficulty', difficulty)
             .eq('entry_date', entry_date)
-            .gt('best_points', myEntry.best_points);
+            .gt('total_points', myEntry.total_points);
           my_position = (above || 0) + 1;
         }
       }
@@ -84,17 +78,14 @@ router.get('/:standard/:term/:subject/:difficulty', async (req, res) => {
       standard,
       term: term || null,
       subject,
-      difficulty,
       date: entry_date,
       total_participants: total_participants || 0,
       my_position,
       entries: (entries || []).map((e, i) => ({
         rank: i + 1,
         nickname: e.nickname,
-        best_score_pct: e.best_score_pct,
-        best_points: e.best_points,
-        correct_count: e.correct_count,
-        total_questions: e.total_questions,
+        total_points: e.total_points,
+        last_score_pct: e.last_score_pct,
         is_current_user: e.user_id === requesting_user_id
       }))
     });
@@ -119,7 +110,7 @@ router.get('/me/:user_id', authenticateToken, async (req, res) => {
 
     const { data: entries, error } = await getSupabase()
       .from('leaderboard_entries')
-      .select('board_key, subject, difficulty, best_score_pct, best_points, standard, term')
+      .select('board_key, subject, total_points, last_score_pct, standard, term')
       .eq('user_id', user_id)
       .eq('entry_date', entry_date);
 
@@ -132,16 +123,14 @@ router.get('/me/:user_id', authenticateToken, async (req, res) => {
         .eq('standard', e.standard)
         .eq('term', e.term || '')
         .eq('subject', e.subject)
-        .eq('difficulty', e.difficulty)
         .eq('entry_date', entry_date)
-        .gt('best_points', e.best_points);
+        .gt('total_points', e.total_points);
 
       return {
         board_key: e.board_key,
         subject: e.subject,
-        difficulty: e.difficulty,
-        best_score_pct: e.best_score_pct,
-        best_points: e.best_points,
+        total_points: e.total_points,
+        last_score_pct: e.last_score_pct,
         rank: (above || 0) + 1
       };
     }));
@@ -162,8 +151,7 @@ router.get('/me/:user_id', authenticateToken, async (req, res) => {
 
 // POST /api/v1/leaderboard/generate-nickname
 router.post('/generate-nickname', authenticateToken, async (req, res) => {
-  const { role } = req.user;
-  if (role !== 'server') {
+  if (req.user.role !== 'server') {
     return res.status(403).json({ error: 'Server JWT required' });
   }
 
@@ -173,7 +161,6 @@ router.post('/generate-nickname', authenticateToken, async (req, res) => {
   }
 
   try {
-    // Idempotent — return existing if already created
     const { data: existing } = await getSupabase()
       .from('user_profiles')
       .select('nickname')
@@ -203,8 +190,7 @@ router.post('/generate-nickname', authenticateToken, async (req, res) => {
 
 // POST /api/v1/leaderboard/regenerate-nickname
 router.post('/regenerate-nickname', authenticateToken, async (req, res) => {
-  const { role } = req.user;
-  if (role !== 'server') {
+  if (req.user.role !== 'server') {
     return res.status(403).json({ error: 'Server JWT required' });
   }
 
@@ -228,13 +214,11 @@ router.post('/regenerate-nickname', authenticateToken, async (req, res) => {
     const new_nickname = await generateNickname([old_nickname]);
     const updated_at = new Date().toISOString();
 
-    // Update profile
     await getSupabase()
       .from('user_profiles')
       .update({ nickname: new_nickname, updated_at })
       .eq('user_id', user_id);
 
-    // Update all leaderboard entries atomically
     await getSupabase()
       .from('leaderboard_entries')
       .update({ nickname: new_nickname })
@@ -245,6 +229,143 @@ router.post('/regenerate-nickname', authenticateToken, async (req, res) => {
   } catch (err) {
     console.error('Regenerate nickname error:', err);
     return res.status(500).json({ error: 'Failed to regenerate nickname', details: err.message });
+  }
+});
+
+// POST /api/v1/leaderboard/reset
+router.post('/reset', authenticateToken, async (req, res) => {
+  if (req.user.role !== 'server') {
+    return res.status(403).json({ error: 'Server JWT required' });
+  }
+
+  try {
+    const entry_date = getTrinidadDate();
+
+    const { data: toArchive, error: fetchError } = await getSupabase()
+      .from('leaderboard_entries')
+      .select('user_id, nickname, standard, term, subject, total_points, last_score_pct, entry_date');
+
+    if (fetchError) throw fetchError;
+
+    if (toArchive && toArchive.length > 0) {
+      const archiveRows = toArchive.map(e => ({
+        user_id: e.user_id,
+        nickname: e.nickname,
+        standard: e.standard,
+        term: e.term,
+        subject: e.subject,
+        total_points: e.total_points,
+        last_score_pct: e.last_score_pct,
+        board_date: e.entry_date,
+        archived_at: new Date().toISOString()
+      }));
+
+      await getSupabase().from('leaderboard_archive').insert(archiveRows);
+    }
+
+    const boardSet = new Set((toArchive || []).map(e => getBoardKey(e.standard, e.term, e.subject)));
+
+    await getSupabase()
+      .from('leaderboard_entries')
+      .delete()
+      .neq('id', 0);
+
+    return res.json({
+      entries_cleared: toArchive?.length || 0,
+      boards_cleared: boardSet.size,
+      reset_at: new Date().toISOString()
+    });
+
+  } catch (err) {
+    console.error('Leaderboard reset error:', err);
+    return res.status(500).json({ error: 'Failed to reset leaderboard', details: err.message });
+  }
+});
+
+// POST /api/v1/leaderboard/test/inject
+router.post('/test/inject', authenticateToken, async (req, res) => {
+  if (req.user.role !== 'server') {
+    return res.status(403).json({ error: 'Server JWT required' });
+  }
+
+  const { nickname, standard, term, subject, points, score_pct } = req.body;
+  if (!nickname || !standard || !subject || points === undefined) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  const entry_date = getTrinidadDate();
+  const board_key = getBoardKey(standard, term, subject);
+  const fake_user_id = `test_${Date.now()}`;
+
+  try {
+    const { data, error } = await getSupabase()
+      .from('leaderboard_entries')
+      .insert({
+        user_id: fake_user_id,
+        nickname,
+        standard,
+        term: term || null,
+        subject,
+        difficulty: 'easy',
+        board_key,
+        total_points: points,
+        last_score_pct: score_pct || 0,
+        entry_date,
+        updated_at: new Date().toISOString()
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    return res.json({ injected: true, entry: data, board_key });
+
+  } catch (err) {
+    console.error('Inject test entry error:', err);
+    return res.status(500).json({ error: 'Failed to inject entry', details: err.message });
+  }
+});
+
+// POST /api/v1/leaderboard/test/reset-board
+router.post('/test/reset-board', authenticateToken, async (req, res) => {
+  if (req.user.role !== 'server') {
+    return res.status(403).json({ error: 'Server JWT required' });
+  }
+
+  const { standard, term, subject } = req.body;
+  if (!standard || !subject) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  const entry_date = getTrinidadDate();
+  const board_key = getBoardKey(standard, term, subject);
+
+  try {
+    const { data: toDelete } = await getSupabase()
+      .from('leaderboard_entries')
+      .select('id')
+      .eq('standard', standard)
+      .eq('term', term || '')
+      .eq('subject', subject)
+      .eq('entry_date', entry_date);
+
+    await getSupabase()
+      .from('leaderboard_entries')
+      .delete()
+      .eq('standard', standard)
+      .eq('term', term || '')
+      .eq('subject', subject)
+      .eq('entry_date', entry_date);
+
+    return res.json({
+      reset: true,
+      entries_cleared: toDelete?.length || 0,
+      board_key
+    });
+
+  } catch (err) {
+    console.error('Reset board error:', err);
+    return res.status(500).json({ error: 'Failed to reset board', details: err.message });
   }
 });
 
