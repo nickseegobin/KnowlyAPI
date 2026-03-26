@@ -20,6 +20,7 @@ const poolRouter = require('./routes/pool');
 const overallInsightRouter = require('./routes/overallInsight');
 const editorReadRouter = require('./routes/editorRead');
 const editorSaveRouter = require('./routes//editorSave');
+const leaderboardRouter = require('./routes/leaderboard');
 
 
 
@@ -36,6 +37,8 @@ app.use('/api/v1/pool', poolRouter);
 app.use('/api/v1/overall-insight', overallInsightRouter);
 app.use('/api/v1/editor-read', editorReadRouter);
 app.use('/api/v1/editor-save', editorSaveRouter);
+app.use('/api/v1/leaderboard', leaderboardRouter);
+
 
 // 404 handler
 app.use((req, res) => {

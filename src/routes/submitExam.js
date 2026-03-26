@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
+const { upsertLeaderboardEntry } = require('../services/leaderboard');
 const getSupabase = require('../config/supabase');
 const crypto = require('crypto');
 
@@ -96,6 +97,23 @@ router.post('/', authenticateToken, async (req, res) => {
 
     await getSupabase().from('exam_results').insert(resultRows);
 
+    // Sync leaderboard upsert — non-fatal
+    let leaderboard_update = null;
+    try {
+      leaderboard_update = await upsertLeaderboardEntry({
+        user_id,
+        standard: packageData.meta?.standard,
+        term: packageData.meta?.term || null,
+        subject: packageData.meta?.subject,
+        difficulty: packageData.meta?.difficulty,
+        correct_count: score,
+        total_questions: total,
+        score_pct: percentage
+      });
+    } catch (err) {
+      console.error('Leaderboard upsert failed (non-fatal):', err.message);
+    }
+
     return res.json({
       session_id,
       score,
@@ -108,7 +126,8 @@ router.post('/', authenticateToken, async (req, res) => {
         correct_answer: a.correct_answer,
         is_correct: a.is_correct,
         explanation: answerSheet.find(x => x.question_id === a.question_id)?.explanation || ''
-      }))
+      })),
+      leaderboard_update
     });
 
   } catch (err) {
