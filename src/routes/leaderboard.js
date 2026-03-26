@@ -4,6 +4,15 @@ const { authenticateToken } = require('../middleware/auth');
 const getSupabase = require('../config/supabase');
 const { getTrinidadDate, getBoardKey, generateNickname, upsertLeaderboardEntry } = require('../services/leaderboard');
 
+function requireServerKey(req, res) {
+  const serverKey = req.headers['x-aep-server-key'];
+  if (!serverKey || serverKey !== process.env.AEP_SERVER_KEY) {
+    res.status(401).json({ error: 'Server key required' });
+    return false;
+  }
+  return true;
+}
+
 // GET /api/v1/leaderboard/:standard/:term/:subject
 router.get('/:standard/:term/:subject', async (req, res) => {
   const { standard, subject } = req.params;
@@ -151,9 +160,7 @@ router.get('/me/:user_id', authenticateToken, async (req, res) => {
 
 // POST /api/v1/leaderboard/generate-nickname
 router.post('/generate-nickname', authenticateToken, async (req, res) => {
-  if (req.user.role !== 'server') {
-    return res.status(403).json({ error: 'Server JWT required' });
-  }
+  if (!requireServerKey(req, res)) return;
 
   const { user_id, standard, term } = req.body;
   if (!user_id || !standard) {
@@ -190,9 +197,7 @@ router.post('/generate-nickname', authenticateToken, async (req, res) => {
 
 // POST /api/v1/leaderboard/regenerate-nickname
 router.post('/regenerate-nickname', authenticateToken, async (req, res) => {
-  if (req.user.role !== 'server') {
-    return res.status(403).json({ error: 'Server JWT required' });
-  }
+  if (!requireServerKey(req, res)) return;
 
   const { user_id } = req.body;
   if (!user_id) {
@@ -234,13 +239,9 @@ router.post('/regenerate-nickname', authenticateToken, async (req, res) => {
 
 // POST /api/v1/leaderboard/reset
 router.post('/reset', authenticateToken, async (req, res) => {
-  if (req.user.role !== 'server') {
-    return res.status(403).json({ error: 'Server JWT required' });
-  }
+  if (!requireServerKey(req, res)) return;
 
   try {
-    const entry_date = getTrinidadDate();
-
     const { data: toArchive, error: fetchError } = await getSupabase()
       .from('leaderboard_entries')
       .select('user_id, nickname, standard, term, subject, total_points, last_score_pct, entry_date');
@@ -284,9 +285,7 @@ router.post('/reset', authenticateToken, async (req, res) => {
 
 // POST /api/v1/leaderboard/test/inject
 router.post('/test/inject', authenticateToken, async (req, res) => {
-  if (req.user.role !== 'server') {
-    return res.status(403).json({ error: 'Server JWT required' });
-  }
+  if (!requireServerKey(req, res)) return;
 
   const { nickname, standard, term, subject, points, score_pct } = req.body;
   if (!nickname || !standard || !subject || points === undefined) {
@@ -328,9 +327,7 @@ router.post('/test/inject', authenticateToken, async (req, res) => {
 
 // POST /api/v1/leaderboard/test/reset-board
 router.post('/test/reset-board', authenticateToken, async (req, res) => {
-  if (req.user.role !== 'server') {
-    return res.status(403).json({ error: 'Server JWT required' });
-  }
+  if (!requireServerKey(req, res)) return;
 
   const { standard, term, subject } = req.body;
   if (!standard || !subject) {

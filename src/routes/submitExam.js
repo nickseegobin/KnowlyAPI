@@ -109,6 +109,8 @@ router.post('/', authenticateToken, async (req, res) => {
         difficulty: packageData.meta?.difficulty,
         correct_count: score,
         score_pct: percentage
+
+        
       });
     } catch (err) {
       console.error('Leaderboard upsert failed (non-fatal):', err.message);
