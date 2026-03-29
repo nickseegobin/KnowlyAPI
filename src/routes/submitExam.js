@@ -1,7 +1,6 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
-const { upsertLeaderboardEntry } = require('../services/leaderboard');
 const getSupabase = require('../config/supabase');
 const crypto = require('crypto');
 
@@ -13,7 +12,6 @@ router.post('/', authenticateToken, async (req, res) => {
   }
 
   try {
-    // Get the package to access answer sheet
     const { data: pkgData, error: pkgError } = await getSupabase()
       .from('exam_pool')
       .select('package_data')
@@ -27,13 +25,11 @@ router.post('/', authenticateToken, async (req, res) => {
     const packageData = pkgData.package_data;
     const answerSheet = packageData.answer_sheet || [];
 
-    // Build answer key map
     const answerKey = {};
     for (const a of answerSheet) {
       answerKey[a.question_id] = a.correct_answer;
     }
 
-    // Score the exam
     let score = 0;
     const scoredAnswers = answers.map(a => {
       const correct = answerKey[a.question_id];
@@ -45,7 +41,6 @@ router.post('/', authenticateToken, async (req, res) => {
     const total = answers.length;
     const percentage = Math.round((score / total) * 100);
 
-    // Topic breakdown
     const topicMap = {};
     for (const a of scoredAnswers) {
       const t = a.topic || a.meta?.topic || 'General';
@@ -60,10 +55,8 @@ router.post('/', authenticateToken, async (req, res) => {
       percentage: Math.round((data.correct / data.total) * 100)
     }));
 
-    // Generate session ID
     const session_id = `sess_${crypto.randomBytes(6).toString('hex')}`;
 
-    // Store session
     await getSupabase().from('exam_sessions').insert({
       session_id,
       user_id,
@@ -80,7 +73,6 @@ router.post('/', authenticateToken, async (req, res) => {
       completed_at: new Date().toISOString()
     });
 
-    // Store individual results
     const resultRows = scoredAnswers.map(a => ({
       session_id,
       user_id,
@@ -97,25 +89,6 @@ router.post('/', authenticateToken, async (req, res) => {
 
     await getSupabase().from('exam_results').insert(resultRows);
 
-    // Sync leaderboard upsert — non-fatal
-    let leaderboard_update = null;
-    try {
-
-      leaderboard_update = await upsertLeaderboardEntry({
-        user_id,
-        standard: packageData.meta?.standard,
-        term: packageData.meta?.term || null,
-        subject: packageData.meta?.subject,
-        difficulty: packageData.meta?.difficulty,
-        correct_count: score,
-        score_pct: percentage
-
-        
-      });
-    } catch (err) {
-      console.error('Leaderboard upsert failed (non-fatal):', err.message);
-    }
-
     return res.json({
       session_id,
       score,
@@ -128,8 +101,7 @@ router.post('/', authenticateToken, async (req, res) => {
         correct_answer: a.correct_answer,
         is_correct: a.is_correct,
         explanation: answerSheet.find(x => x.question_id === a.question_id)?.explanation || ''
-      })),
-      leaderboard_update
+      }))
     });
 
   } catch (err) {

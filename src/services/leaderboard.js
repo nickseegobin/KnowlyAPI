@@ -48,10 +48,12 @@ Return ONLY the nickname, nothing else.`;
   return clean + String(Math.floor(Math.random() * 90) + 10);
 }
 
-async function upsertLeaderboardEntry({ user_id, standard, term, subject, difficulty, correct_count, score_pct }) {
+async function upsertLeaderboardEntry({ user_id, standard, term, subject, difficulty, correct_count, score_pct, points }) {
   const entry_date = getTrinidadDate();
   const board_key = getBoardKey(standard, term, subject);
-  const new_points = calcPoints(correct_count, difficulty);
+
+  // Use pre-calculated points from WP if provided, fallback to local calc
+  const new_points = (typeof points === 'number') ? points : calcPoints(correct_count, difficulty);
 
   // Get profile for nickname
   const { data: profile } = await getSupabase()
@@ -62,13 +64,13 @@ async function upsertLeaderboardEntry({ user_id, standard, term, subject, diffic
 
   const nickname = profile?.nickname || `User${user_id}`;
 
-  // Get previous rank before upsert
+  // Get previous entry for today
   const { data: existing } = await getSupabase()
     .from('leaderboard_entries')
     .select('total_points')
     .eq('user_id', user_id)
     .eq('standard', standard)
-    .eq('term', term || '')
+    .eq('term', term || null)
     .eq('subject', subject)
     .eq('entry_date', entry_date)
     .single();
@@ -79,7 +81,7 @@ async function upsertLeaderboardEntry({ user_id, standard, term, subject, diffic
       .from('leaderboard_entries')
       .select('id', { count: 'exact', head: true })
       .eq('standard', standard)
-      .eq('term', term || '')
+      .eq('term', term || null)
       .eq('subject', subject)
       .eq('entry_date', entry_date)
       .gt('total_points', existing.total_points);
@@ -111,7 +113,7 @@ async function upsertLeaderboardEntry({ user_id, standard, term, subject, diffic
     .from('leaderboard_entries')
     .select('id', { count: 'exact', head: true })
     .eq('standard', standard)
-    .eq('term', term || '')
+    .eq('term', term || null)
     .eq('subject', subject)
     .eq('entry_date', entry_date)
     .gt('total_points', new_total);

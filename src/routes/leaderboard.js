@@ -4,10 +4,6 @@ const { authenticateToken } = require('../middleware/auth');
 const getSupabase = require('../config/supabase');
 const { getTrinidadDate, getBoardKey, generateNickname, upsertLeaderboardEntry } = require('../services/leaderboard');
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Auth helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
 function requireServerKey(req, res) {
   const serverKey = req.headers['x-aep-server-key'];
   if (!serverKey || serverKey !== process.env.AEP_SERVER_KEY) {
@@ -17,128 +13,13 @@ function requireServerKey(req, res) {
   return true;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// POST /api/v1/leaderboard/upsert  (WordPress server-to-server)
-// ─────────────────────────────────────────────────────────────────────────────
-router.post('/upsert', async (req, res) => {
-  if (!requireServerKey(req, res)) return;
-
-  const { user_id, standard, subject, points, score_pct, term, difficulty, session_id } = req.body;
-
-  const missing = ['user_id', 'standard', 'subject', 'points', 'score_pct', 'session_id'].filter(f => {
-    const v = req.body[f];
-    return v === undefined || v === null || v === '';
-  });
-  if (missing.length) {
-    return res.status(400).json({ error: `Missing required fields: ${missing.join(', ')}` });
-  }
-
-  // BUG H FIX: WP sends user_id as a string "(string) $child_id".
-  // Coerce to string explicitly so Supabase .eq() comparisons are consistent
-  // regardless of whether your user_profiles column is uuid/text or int.
-  // If your column is integer, change this to: const uid = parseInt(user_id, 10);
-  const uid = String(user_id);
-
-  // BUG D FIX: normalise term — never store null, always use empty string "".
-  // This keeps parity with the board-fetch query which also uses term || "".
-  // WP sends "none" for std_5 — map that to "" as well.
-  const normTerm = (!term || term === 'none') ? '' : term;
-
-  try {
-    const { data: profile, error: profileError } = await getSupabase()
-      .from('user_profiles')
-      .select('nickname')
-      .eq('user_id', uid)
-      .single();
-
-    if (profileError || !profile) {
-      return res.status(404).json({ error: 'User profile not found — nickname not generated yet' });
-    }
-
-    const nickname = profile.nickname;
-    const entry_date = getTrinidadDate();
-    const board_key = getBoardKey(standard, normTerm || null, subject);
-
-    const { data: existing } = await getSupabase()
-      .from('leaderboard_entries')
-      .select('total_points')
-      .eq('user_id', uid)
-      .eq('standard', standard)
-      .eq('term', normTerm)
-      .eq('subject', subject)
-      .eq('entry_date', entry_date)
-      .single();
-
-    const previous_total = existing?.total_points || 0;
-    const new_total = previous_total + points;
-
-    let previous_rank = null;
-    if (existing) {
-      const { count: abovePrev } = await getSupabase()
-        .from('leaderboard_entries')
-        .select('id', { count: 'exact', head: true })
-        .eq('standard', standard)
-        .eq('term', normTerm)
-        .eq('subject', subject)
-        .eq('entry_date', entry_date)
-        .gt('total_points', previous_total);
-      previous_rank = (abovePrev || 0) + 1;
-    }
-
-    const { error: upsertError } = await getSupabase()
-      .from('leaderboard_entries')
-      .upsert({
-        user_id: uid,
-        nickname,
-        standard,
-        term: normTerm,
-        subject,
-        difficulty: difficulty || null,
-        board_key,
-        total_points: new_total,
-        last_score_pct: score_pct,
-        entry_date,
-        updated_at: new Date().toISOString()
-      }, { onConflict: 'user_id,standard,term,subject,entry_date' });
-
-    if (upsertError) throw upsertError;
-
-    const { count: aboveNew } = await getSupabase()
-      .from('leaderboard_entries')
-      .select('id', { count: 'exact', head: true })
-      .eq('standard', standard)
-      .eq('term', normTerm)
-      .eq('subject', subject)
-      .eq('entry_date', entry_date)
-      .gt('total_points', new_total);
-
-    const new_rank = (aboveNew || 0) + 1;
-
-    return res.json({
-      was_updated: true,
-      total_points_today: new_total,
-      previous_rank,
-      new_rank,
-      board_key
-    });
-
-  } catch (err) {
-    console.error('[leaderboard/upsert] error:', err.message, err.stack);
-    return res.status(500).json({ error: 'Failed to upsert leaderboard entry', details: err.message });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
 // GET /api/v1/leaderboard/:standard/:term/:subject
-// ─────────────────────────────────────────────────────────────────────────────
 router.get('/:standard/:term/:subject', async (req, res) => {
   const { standard, subject } = req.params;
-  const term = req.params.term === 'none' ? '' : req.params.term;
+  const term = req.params.term === 'none' ? null : req.params.term;
   const entry_date = getTrinidadDate();
-  const board_key = getBoardKey(standard, term || null, subject);
+  const board_key = getBoardKey(standard, term, subject);
 
-  // Requesting user can come from either a JWT *or* a ?user_id query param
-  // (WP server calls pass user_id as a query param, not a JWT)
   let requesting_user_id = null;
   try {
     const authHeader = req.headers.authorization;
@@ -146,21 +27,16 @@ router.get('/:standard/:term/:subject', async (req, res) => {
       const jwt = require('jsonwebtoken');
       const token = authHeader.split(' ')[1];
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      requesting_user_id = decoded.user_id ? String(decoded.user_id) : null;
+      requesting_user_id = decoded.user_id;
     }
   } catch (_) {}
-
-  // Fallback: WP service passes child_id as ?user_id
-  if (!requesting_user_id && req.query.user_id) {
-    requesting_user_id = String(req.query.user_id);
-  }
 
   try {
     const { data: entries, error } = await getSupabase()
       .from('leaderboard_entries')
       .select('user_id, nickname, total_points, last_score_pct')
       .eq('standard', standard)
-      .eq('term', term)
+      .eq('term', term || null)
       .eq('subject', subject)
       .eq('entry_date', entry_date)
       .order('total_points', { ascending: false })
@@ -172,13 +48,13 @@ router.get('/:standard/:term/:subject', async (req, res) => {
       .from('leaderboard_entries')
       .select('id', { count: 'exact', head: true })
       .eq('standard', standard)
-      .eq('term', term)
+      .eq('term', term || null)
       .eq('subject', subject)
       .eq('entry_date', entry_date);
 
     let my_position = null;
     if (requesting_user_id) {
-      const userInTop = entries?.findIndex(e => String(e.user_id) === requesting_user_id);
+      const userInTop = entries?.findIndex(e => e.user_id === requesting_user_id);
       if (userInTop >= 0) {
         my_position = userInTop + 1;
       } else {
@@ -187,7 +63,7 @@ router.get('/:standard/:term/:subject', async (req, res) => {
           .select('total_points')
           .eq('user_id', requesting_user_id)
           .eq('standard', standard)
-          .eq('term', term)
+          .eq('term', term || null)
           .eq('subject', subject)
           .eq('entry_date', entry_date)
           .single();
@@ -197,7 +73,7 @@ router.get('/:standard/:term/:subject', async (req, res) => {
             .from('leaderboard_entries')
             .select('id', { count: 'exact', head: true })
             .eq('standard', standard)
-            .eq('term', term)
+            .eq('term', term || null)
             .eq('subject', subject)
             .eq('entry_date', entry_date)
             .gt('total_points', myEntry.total_points);
@@ -219,7 +95,7 @@ router.get('/:standard/:term/:subject', async (req, res) => {
         nickname: e.nickname,
         total_points: e.total_points,
         last_score_pct: e.last_score_pct,
-        is_current_user: String(e.user_id) === requesting_user_id
+        is_current_user: e.user_id === requesting_user_id
       }))
     });
 
@@ -229,18 +105,9 @@ router.get('/:standard/:term/:subject', async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
 // GET /api/v1/leaderboard/me/:user_id
-//
-// BUG B FIX: This was using authenticateToken (expects user JWT).
-// WP calls this server-to-server with X-AEP-Server-Key only.
-// Changed to requireServerKey.
-// ─────────────────────────────────────────────────────────────────────────────
-router.get('/me/:user_id', async (req, res) => {
-  if (!requireServerKey(req, res)) return;
-
-  // BUG H FIX: coerce to string for consistent Supabase .eq() matching
-  const user_id = String(req.params.user_id);
+router.get('/me/:user_id', authenticateToken, async (req, res) => {
+  const { user_id } = req.params;
   const entry_date = getTrinidadDate();
 
   try {
@@ -263,7 +130,7 @@ router.get('/me/:user_id', async (req, res) => {
         .from('leaderboard_entries')
         .select('id', { count: 'exact', head: true })
         .eq('standard', e.standard)
-        .eq('term', e.term || '')
+        .eq('term', e.term || null)
         .eq('subject', e.subject)
         .eq('entry_date', entry_date)
         .gt('total_points', e.total_points);
@@ -291,14 +158,8 @@ router.get('/me/:user_id', async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
 // POST /api/v1/leaderboard/generate-nickname
-//
-// BUG C FIX: Had both authenticateToken AND requireServerKey stacked.
-// authenticateToken rejects server-key calls before requireServerKey fires.
-// Removed authenticateToken — server key is the only auth needed here.
-// ─────────────────────────────────────────────────────────────────────────────
-router.post('/generate-nickname', async (req, res) => {
+router.post('/generate-nickname', authenticateToken, async (req, res) => {
   if (!requireServerKey(req, res)) return;
 
   const { user_id, standard, term } = req.body;
@@ -306,29 +167,27 @@ router.post('/generate-nickname', async (req, res) => {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
-  const uid = String(user_id);
-
   try {
     const { data: existing } = await getSupabase()
       .from('user_profiles')
       .select('nickname')
-      .eq('user_id', uid)
+      .eq('user_id', user_id)
       .single();
 
-    if (existing?.nickname) {
-      return res.json({ user_id: uid, nickname: existing.nickname, is_new: false });
+    if (existing) {
+      return res.json({ user_id, nickname: existing.nickname, is_new: false });
     }
 
     const nickname = await generateNickname();
 
     await getSupabase().from('user_profiles').insert({
-      user_id: uid,
+      user_id,
       nickname,
       standard,
       term: term || null
     });
 
-    return res.json({ user_id: uid, nickname, is_new: true });
+    return res.json({ user_id, nickname, is_new: true });
 
   } catch (err) {
     console.error('Generate nickname error:', err);
@@ -336,11 +195,8 @@ router.post('/generate-nickname', async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
 // POST /api/v1/leaderboard/regenerate-nickname
-// BUG C FIX: same dual-auth problem as generate-nickname. Removed authenticateToken.
-// ─────────────────────────────────────────────────────────────────────────────
-router.post('/regenerate-nickname', async (req, res) => {
+router.post('/regenerate-nickname', authenticateToken, async (req, res) => {
   if (!requireServerKey(req, res)) return;
 
   const { user_id } = req.body;
@@ -348,13 +204,11 @@ router.post('/regenerate-nickname', async (req, res) => {
     return res.status(400).json({ error: 'Missing user_id' });
   }
 
-  const uid = String(user_id);
-
   try {
     const { data: profile } = await getSupabase()
       .from('user_profiles')
       .select('nickname')
-      .eq('user_id', uid)
+      .eq('user_id', user_id)
       .single();
 
     if (!profile) {
@@ -368,14 +222,14 @@ router.post('/regenerate-nickname', async (req, res) => {
     await getSupabase()
       .from('user_profiles')
       .update({ nickname: new_nickname, updated_at })
-      .eq('user_id', uid);
+      .eq('user_id', user_id);
 
     await getSupabase()
       .from('leaderboard_entries')
       .update({ nickname: new_nickname })
-      .eq('user_id', uid);
+      .eq('user_id', user_id);
 
-    return res.json({ user_id: uid, old_nickname, new_nickname, updated_at });
+    return res.json({ user_id, old_nickname, new_nickname, updated_at });
 
   } catch (err) {
     console.error('Regenerate nickname error:', err);
@@ -383,10 +237,19 @@ router.post('/regenerate-nickname', async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/v1/leaderboard/upsert
+router.post('/upsert', async (req, res) => {
+  if (!requireServerKey(req, res)) return;
+  try {
+    const result = await upsertLeaderboardEntry(req.body);
+    res.json(result);
+  } catch (err) {
+    console.error('[leaderboard] upsert failed', err.stack);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/v1/leaderboard/reset
-// BUG C FIX: Removed authenticateToken — server key only.
-// ─────────────────────────────────────────────────────────────────────────────
 router.post('/reset', async (req, res) => {
   if (!requireServerKey(req, res)) return;
 
@@ -431,62 +294,28 @@ router.post('/reset', async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
 // POST /api/v1/leaderboard/test/inject
-//
-// BUG C FIX: Removed authenticateToken.
-// BUG D FIX: term stored as normTerm ("") not (term || null).
-//            null breaks the unique index on (user_id,standard,term,subject,entry_date)
-//            and prevents test entries from appearing when the board queries term="".
-// ─────────────────────────────────────────────────────────────────────────────
 router.post('/test/inject', async (req, res) => {
   if (!requireServerKey(req, res)) return;
-
-  const { nickname, standard, term, subject, points, score_pct } = req.body;
-  if (!nickname || !standard || !subject || points === undefined) {
-    return res.status(400).json({ error: 'Missing required fields' });
-  }
-
-  // BUG D FIX: normalise term the same way upsert does
-  const normTerm = (!term || term === 'none') ? '' : term;
-
-  const entry_date = getTrinidadDate();
-  const board_key = getBoardKey(standard, normTerm || null, subject);
-  const fake_user_id = `test_${Date.now()}`;
-
   try {
-    const { data, error } = await getSupabase()
-      .from('leaderboard_entries')
-      .insert({
-        user_id: fake_user_id,
-        nickname,
-        standard,
-        term: normTerm,        // ← was: term || null
-        subject,
-        difficulty: 'easy',
-        board_key,
-        total_points: points,
-        last_score_pct: score_pct || 0,
-        entry_date,
-        updated_at: new Date().toISOString()
-      })
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    return res.json({ injected: true, entry: data, board_key });
-
+    const result = await upsertLeaderboardEntry({
+      user_id:    req.body.user_id || `test_${Date.now()}`,
+      nickname:   req.body.nickname,
+      standard:   req.body.standard,
+      term:       req.body.term || null,
+      subject:    req.body.subject,
+      difficulty: req.body.difficulty || 'easy',
+      points:     req.body.points,
+      score_pct:  req.body.score_pct
+    });
+    res.json({ injected: true, ...result });
   } catch (err) {
-    console.error('Inject test entry error:', err);
-    return res.status(500).json({ error: 'Failed to inject entry', details: err.message });
+    console.error('[leaderboard] test inject failed', err.stack);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
 // POST /api/v1/leaderboard/test/reset-board
-// BUG C FIX: Removed authenticateToken.
-// ─────────────────────────────────────────────────────────────────────────────
 router.post('/test/reset-board', async (req, res) => {
   if (!requireServerKey(req, res)) return;
 
@@ -495,16 +324,15 @@ router.post('/test/reset-board', async (req, res) => {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
-  const normTerm = (!term || term === 'none') ? '' : term;
   const entry_date = getTrinidadDate();
-  const board_key = getBoardKey(standard, normTerm || null, subject);
+  const board_key = getBoardKey(standard, term, subject);
 
   try {
     const { data: toDelete } = await getSupabase()
       .from('leaderboard_entries')
       .select('id')
       .eq('standard', standard)
-      .eq('term', normTerm)
+      .eq('term', term || null)
       .eq('subject', subject)
       .eq('entry_date', entry_date);
 
@@ -512,7 +340,7 @@ router.post('/test/reset-board', async (req, res) => {
       .from('leaderboard_entries')
       .delete()
       .eq('standard', standard)
-      .eq('term', normTerm)
+      .eq('term', term || null)
       .eq('subject', subject)
       .eq('entry_date', entry_date);
 
