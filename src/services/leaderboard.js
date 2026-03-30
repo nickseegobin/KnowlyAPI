@@ -48,21 +48,14 @@ Return ONLY the nickname, nothing else.`;
   return clean + String(Math.floor(Math.random() * 90) + 10);
 }
 
-async function upsertLeaderboardEntry({ user_id, standard, term, subject, difficulty, correct_count, score_pct, points }) {
+async function upsertLeaderboardEntry({ user_id, nickname, standard, term, subject, difficulty, correct_count, score_pct, points }) {
   const entry_date = getTrinidadDate();
   const board_key = getBoardKey(standard, term, subject);
 
   // Use pre-calculated points from WP if provided, fallback to local calc
   const new_points = (typeof points === 'number') ? points : calcPoints(correct_count, difficulty);
 
-  // Get profile for nickname
-  const { data: profile } = await getSupabase()
-    .from('user_profiles')
-    .select('nickname')
-    .eq('user_id', user_id)
-    .single();
-
-  const nickname = profile?.nickname || `User${user_id}`;
+  const display_nickname = nickname || `Player${user_id}`;
 
   // Get previous entry for today
   const { data: existing } = await getSupabase()
@@ -96,7 +89,7 @@ async function upsertLeaderboardEntry({ user_id, standard, term, subject, diffic
     .from('leaderboard_entries')
     .upsert({
       user_id,
-      nickname,
+      nickname: display_nickname,
       standard,
       term: term || null,
       subject,
