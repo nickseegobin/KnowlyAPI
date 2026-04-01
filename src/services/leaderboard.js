@@ -55,32 +55,28 @@ Return ONLY the nickname, nothing else.`;
 }
 
 async function upsertLeaderboardEntry({ user_id, nickname, standard, term, subject, difficulty, correct_count, score_pct, points }) {
-  // Normalize term — treat 'none', null, undefined, '' all as null (std_5 has no term)
-  const normalised_term = (!term || term === 'none') ? null : term;
-
-  const entry_date    = getTrinidadDate();
-  const board_key     = getBoardKey(standard, normalised_term, subject);
-  const new_points    = (typeof points === 'number') ? points : calcPoints(correct_count, difficulty);
+  const normalised_term  = (!term || term === 'none') ? null : term;
+  const entry_date       = getTrinidadDate();
+  const board_key        = getBoardKey(standard, normalised_term, subject);
+  const new_points       = (typeof points === 'number') ? points : calcPoints(correct_count, difficulty);
   const display_nickname = nickname || `Player${user_id}`;
 
-  // ── Fetch existing entry for today ──────────────────────────────────────────
-  // Must use applyTermFilter — .eq('term', null) never matches NULL in Supabase
-  const existingQuery = applyTermFilter(
+  // ── Fetch existing entry ─────────────────────────────────────────────────────
+  const { data: existing } = await applyTermFilter(
     getSupabase()
       .from('leaderboard_entries')
-      .select('total_points')
+      .select('id, total_points')
       .eq('user_id', user_id)
       .eq('standard', standard)
       .eq('subject', subject)
       .eq('entry_date', entry_date),
     normalised_term
-  );
-  const { data: existing } = await existingQuery.single();
+  ).single();
 
   // ── Previous rank ────────────────────────────────────────────────────────────
   let previous_rank = null;
   if (existing) {
-    const prevRankQuery = applyTermFilter(
+    const { count: above } = await applyTermFilter(
       getSupabase()
         .from('leaderboard_entries')
         .select('id', { count: 'exact', head: true })
@@ -90,33 +86,51 @@ async function upsertLeaderboardEntry({ user_id, nickname, standard, term, subje
         .gt('total_points', existing.total_points),
       normalised_term
     );
-    const { count: above } = await prevRankQuery;
     previous_rank = (above || 0) + 1;
   }
 
-  // ── Accumulate points ────────────────────────────────────────────────────────
+  // ── Accumulate ───────────────────────────────────────────────────────────────
   const previous_total = existing?.total_points || 0;
   const new_total      = previous_total + new_points;
 
-  // ── Upsert ───────────────────────────────────────────────────────────────────
-  await getSupabase()
-    .from('leaderboard_entries')
-    .upsert({
-      user_id,
-      nickname:         display_nickname,
-      standard,
-      term:             normalised_term,
-      subject,
-      difficulty,
-      board_key,
-      total_points:     new_total,
-      last_score_pct:   score_pct,
-      entry_date,
-      updated_at:       new Date().toISOString(),
-    }, { onConflict: 'user_id,standard,term,subject,entry_date' });
+  // ── Explicit UPDATE or INSERT — avoids NULL unique constraint bug ────────────
+  if (existing) {
+    await applyTermFilter(
+      getSupabase()
+        .from('leaderboard_entries')
+        .update({
+          nickname:       display_nickname,
+          total_points:   new_total,
+          last_score_pct: score_pct,
+          board_key,
+          updated_at:     new Date().toISOString(),
+        })
+        .eq('user_id', user_id)
+        .eq('standard', standard)
+        .eq('subject', subject)
+        .eq('entry_date', entry_date),
+      normalised_term
+    );
+  } else {
+    await getSupabase()
+      .from('leaderboard_entries')
+      .insert({
+        user_id,
+        nickname:       display_nickname,
+        standard,
+        term:           normalised_term,
+        subject,
+        difficulty,
+        board_key,
+        total_points:   new_total,
+        last_score_pct: score_pct,
+        entry_date,
+        updated_at:     new Date().toISOString(),
+      });
+  }
 
-  // ── New rank after upsert ────────────────────────────────────────────────────
-  const newRankQuery = applyTermFilter(
+  // ── New rank after write ──────────────────────────────────────────────────────
+  const { count: newAbove } = await applyTermFilter(
     getSupabase()
       .from('leaderboard_entries')
       .select('id', { count: 'exact', head: true })
@@ -126,7 +140,6 @@ async function upsertLeaderboardEntry({ user_id, nickname, standard, term, subje
       .gt('total_points', new_total),
     normalised_term
   );
-  const { count: newAbove } = await newRankQuery;
   const new_rank = (newAbove || 0) + 1;
 
   return {
