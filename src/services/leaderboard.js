@@ -89,28 +89,33 @@ async function upsertLeaderboardEntry({ user_id, nickname, standard, term, subje
     previous_rank = (above || 0) + 1;
   }
 
-  // ── Accumulate ───────────────────────────────────────────────────────────────
-  const previous_total = existing?.total_points || 0;
-  const new_total      = previous_total + new_points;
+  // ── Best score wins — only update if new attempt beats current best ──────────
+  const current_best = existing?.total_points || 0;
+  const is_new_best  = new_points > current_best;
+  const final_total  = is_new_best ? new_points : current_best;
 
-  // ── Explicit UPDATE or INSERT — avoids NULL unique constraint bug ────────────
+  // ── Write only if new best OR first entry ────────────────────────────────────
   if (existing) {
-    await applyTermFilter(
-      getSupabase()
-        .from('leaderboard_entries')
-        .update({
-          nickname:       display_nickname,
-          total_points:   new_total,
-          last_score_pct: score_pct,
-          board_key,
-          updated_at:     new Date().toISOString(),
-        })
-        .eq('user_id', user_id)
-        .eq('standard', standard)
-        .eq('subject', subject)
-        .eq('entry_date', entry_date),
-      normalised_term
-    );
+    if (is_new_best) {
+      await applyTermFilter(
+        getSupabase()
+          .from('leaderboard_entries')
+          .update({
+            nickname:       display_nickname,
+            total_points:   final_total,
+            last_score_pct: score_pct,
+            difficulty,
+            board_key,
+            updated_at:     new Date().toISOString(),
+          })
+          .eq('user_id', user_id)
+          .eq('standard', standard)
+          .eq('subject', subject)
+          .eq('entry_date', entry_date),
+        normalised_term
+      );
+    }
+    // If not a new best — no write needed, rank stays the same
   } else {
     await getSupabase()
       .from('leaderboard_entries')
@@ -122,14 +127,14 @@ async function upsertLeaderboardEntry({ user_id, nickname, standard, term, subje
         subject,
         difficulty,
         board_key,
-        total_points:   new_total,
+        total_points:   final_total,
         last_score_pct: score_pct,
         entry_date,
         updated_at:     new Date().toISOString(),
       });
   }
 
-  // ── New rank after write ──────────────────────────────────────────────────────
+  // ── New rank ──────────────────────────────────────────────────────────────────
   const { count: newAbove } = await applyTermFilter(
     getSupabase()
       .from('leaderboard_entries')
@@ -137,19 +142,20 @@ async function upsertLeaderboardEntry({ user_id, nickname, standard, term, subje
       .eq('standard', standard)
       .eq('subject', subject)
       .eq('entry_date', entry_date)
-      .gt('total_points', new_total),
+      .gt('total_points', final_total),
     normalised_term
   );
   const new_rank = (newAbove || 0) + 1;
 
   return {
-    was_updated:        true,
-    total_points_today: new_total,
+    was_updated:        is_new_best || !existing,
+    total_points_today: final_total,
     previous_rank,
     new_rank,
     board_key,
   };
 }
+
 
 module.exports = {
   getTrinidadDate,
