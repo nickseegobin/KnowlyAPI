@@ -16,6 +16,12 @@ function calcPoints(correct_count, difficulty) {
   return correct_count + bonus;
 }
 
+// Supabase requires .is() not .eq() for NULL comparisons.
+// .eq('term', null) uses SQL = which never matches NULL — use .is('term', null) instead.
+function applyTermFilter(query, term) {
+  return term === null ? query.is('term', null) : query.eq('term', term);
+}
+
 async function generateNickname(existingNicknames = [], retries = 3) {
   const prompt = `Generate a single fun Caribbean-flavoured nickname for a primary school student on an exam platform in Trinidad and Tobago.
 
@@ -47,150 +53,96 @@ Return ONLY the nickname, nothing else.`;
   const clean = base.trim().replace(/\s+/g, '').replace(/[^a-zA-Z]/g, '');
   return clean + String(Math.floor(Math.random() * 90) + 10);
 }
-//Condemed Method - not used anymore, but keeping for reference until we are sure the new one works well
-/* async function upsertLeaderboardEntry({ user_id, nickname, standard, term, subject, difficulty, correct_count, score_pct, points }) {
-  const entry_date = getTrinidadDate();
-  const board_key = getBoardKey(standard, term, subject);
 
-  // Use pre-calculated points from WP if provided, fallback to local calc
-  const new_points = (typeof points === 'number') ? points : calcPoints(correct_count, difficulty);
-
-  const display_nickname = nickname || `Player${user_id}`;
-
-  // Get previous entry for today
-  const { data: existing } = await getSupabase()
-    .from('leaderboard_entries')
-    .select('total_points')
-    .eq('user_id', user_id)
-    .eq('standard', standard)
-    .eq('term', term || null)
-    .eq('subject', subject)
-    .eq('entry_date', entry_date)
-    .single();
-
-  let previous_rank = null;
-  if (existing) {
-    const { count: above } = await getSupabase()
-      .from('leaderboard_entries')
-      .select('id', { count: 'exact', head: true })
-      .eq('standard', standard)
-      .eq('term', term || null)
-      .eq('subject', subject)
-      .eq('entry_date', entry_date)
-      .gt('total_points', existing.total_points);
-    previous_rank = (above || 0) + 1;
-  }
-
-  // Accumulate points
-  const previous_total = existing?.total_points || 0;
-  const new_total = previous_total + new_points;
-
-  await getSupabase()
-    .from('leaderboard_entries')
-    .upsert({
-      user_id,
-      nickname: display_nickname,
-      standard,
-      term: term || null,
-      subject,
-      difficulty,
-      board_key,
-      total_points: new_total,
-      last_score_pct: score_pct,
-      entry_date,
-      updated_at: new Date().toISOString()
-    }, { onConflict: 'user_id,standard,term,subject,entry_date' });
-
-  // Get new rank after upsert
-  const { count: newAbove } = await getSupabase()
-    .from('leaderboard_entries')
-    .select('id', { count: 'exact', head: true })
-    .eq('standard', standard)
-    .eq('term', term || null)
-    .eq('subject', subject)
-    .eq('entry_date', entry_date)
-    .gt('total_points', new_total);
-
-  const new_rank = (newAbove || 0) + 1;
-
-  return {
-    was_updated: true,
-    total_points_today: new_total,
-    previous_rank,
-    new_rank,
-    board_key
-  };
-} */
-
-  async function upsertLeaderboardEntry({ user_id, nickname, standard, term, subject, difficulty, correct_count, score_pct, points }) {
-  // Normalize term — treat 'none', null, undefined, '' all as null
+async function upsertLeaderboardEntry({ user_id, nickname, standard, term, subject, difficulty, correct_count, score_pct, points }) {
+  // Normalize term — treat 'none', null, undefined, '' all as null (std_5 has no term)
   const normalised_term = (!term || term === 'none') ? null : term;
-  
-  const entry_date = getTrinidadDate();
-  const board_key = getBoardKey(standard, normalised_term, subject);
-  const new_points = (typeof points === 'number') ? points : calcPoints(correct_count, difficulty);
+
+  const entry_date    = getTrinidadDate();
+  const board_key     = getBoardKey(standard, normalised_term, subject);
+  const new_points    = (typeof points === 'number') ? points : calcPoints(correct_count, difficulty);
   const display_nickname = nickname || `Player${user_id}`;
 
-  const { data: existing } = await getSupabase()
-    .from('leaderboard_entries')
-    .select('total_points')
-    .eq('user_id', user_id)
-    .eq('standard', standard)
-    .eq('term', normalised_term)        // ← use normalised_term
-    .eq('subject', subject)
-    .eq('entry_date', entry_date)
-    .single();
+  // ── Fetch existing entry for today ──────────────────────────────────────────
+  // Must use applyTermFilter — .eq('term', null) never matches NULL in Supabase
+  const existingQuery = applyTermFilter(
+    getSupabase()
+      .from('leaderboard_entries')
+      .select('total_points')
+      .eq('user_id', user_id)
+      .eq('standard', standard)
+      .eq('subject', subject)
+      .eq('entry_date', entry_date),
+    normalised_term
+  );
+  const { data: existing } = await existingQuery.single();
 
+  // ── Previous rank ────────────────────────────────────────────────────────────
   let previous_rank = null;
   if (existing) {
-    const { count: above } = await getSupabase()
-      .from('leaderboard_entries')
-      .select('id', { count: 'exact', head: true })
-      .eq('standard', standard)
-      .eq('term', normalised_term)      // ← use normalised_term
-      .eq('subject', subject)
-      .eq('entry_date', entry_date)
-      .gt('total_points', existing.total_points);
+    const prevRankQuery = applyTermFilter(
+      getSupabase()
+        .from('leaderboard_entries')
+        .select('id', { count: 'exact', head: true })
+        .eq('standard', standard)
+        .eq('subject', subject)
+        .eq('entry_date', entry_date)
+        .gt('total_points', existing.total_points),
+      normalised_term
+    );
+    const { count: above } = await prevRankQuery;
     previous_rank = (above || 0) + 1;
   }
 
+  // ── Accumulate points ────────────────────────────────────────────────────────
   const previous_total = existing?.total_points || 0;
-  const new_total = previous_total + new_points;
+  const new_total      = previous_total + new_points;
 
+  // ── Upsert ───────────────────────────────────────────────────────────────────
   await getSupabase()
     .from('leaderboard_entries')
     .upsert({
       user_id,
-      nickname: display_nickname,
+      nickname:         display_nickname,
       standard,
-      term: normalised_term,            // ← use normalised_term
+      term:             normalised_term,
       subject,
       difficulty,
       board_key,
-      total_points: new_total,
-      last_score_pct: score_pct,
+      total_points:     new_total,
+      last_score_pct:   score_pct,
       entry_date,
-      updated_at: new Date().toISOString()
+      updated_at:       new Date().toISOString(),
     }, { onConflict: 'user_id,standard,term,subject,entry_date' });
 
-  const { count: newAbove } = await getSupabase()
-    .from('leaderboard_entries')
-    .select('id', { count: 'exact', head: true })
-    .eq('standard', standard)
-    .eq('term', normalised_term)        // ← use normalised_term
-    .eq('subject', subject)
-    .eq('entry_date', entry_date)
-    .gt('total_points', new_total);
-
+  // ── New rank after upsert ────────────────────────────────────────────────────
+  const newRankQuery = applyTermFilter(
+    getSupabase()
+      .from('leaderboard_entries')
+      .select('id', { count: 'exact', head: true })
+      .eq('standard', standard)
+      .eq('subject', subject)
+      .eq('entry_date', entry_date)
+      .gt('total_points', new_total),
+    normalised_term
+  );
+  const { count: newAbove } = await newRankQuery;
   const new_rank = (newAbove || 0) + 1;
 
   return {
-    was_updated: true,
+    was_updated:        true,
     total_points_today: new_total,
     previous_rank,
     new_rank,
-    board_key
+    board_key,
   };
 }
 
-module.exports = { getTrinidadDate, getBoardKey, calcPoints, generateNickname, upsertLeaderboardEntry };
+module.exports = {
+  getTrinidadDate,
+  getBoardKey,
+  calcPoints,
+  generateNickname,
+  upsertLeaderboardEntry,
+  applyTermFilter,  // exported so routes/leaderboard.js can use it for GET queries
+};

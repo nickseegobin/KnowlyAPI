@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
 const getSupabase = require('../config/supabase');
-const { getTrinidadDate, getBoardKey, generateNickname, upsertLeaderboardEntry } = require('../services/leaderboard');
+const { getTrinidadDate, getBoardKey, generateNickname, upsertLeaderboardEntry, applyTermFilter } = require('../services/leaderboard');
 
 function requireServerKey(req, res) {
   const serverKey = req.headers['x-aep-server-key'];
@@ -32,25 +32,29 @@ router.get('/:standard/:term/:subject', async (req, res) => {
   } catch (_) {}
 
   try {
-    const { data: entries, error } = await getSupabase()
-      .from('leaderboard_entries')
-      .select('user_id, nickname, total_points, last_score_pct')
-      .eq('standard', standard)
-      .eq('term', term || null)
-      .eq('subject', subject)
-      .eq('entry_date', entry_date)
-      .order('total_points', { ascending: false })
-      .limit(10);
+    const { data: entries, error } = await applyTermFilter(
+      getSupabase()
+        .from('leaderboard_entries')
+        .select('user_id, nickname, total_points, last_score_pct')
+        .eq('standard', standard)
+        .eq('subject', subject)
+        .eq('entry_date', entry_date)
+        .order('total_points', { ascending: false })
+        .limit(10),
+      term
+    );
 
     if (error) throw error;
 
-    const { count: total_participants } = await getSupabase()
-      .from('leaderboard_entries')
-      .select('id', { count: 'exact', head: true })
-      .eq('standard', standard)
-      .eq('term', term || null)
-      .eq('subject', subject)
-      .eq('entry_date', entry_date);
+    const { count: total_participants } = await applyTermFilter(
+      getSupabase()
+        .from('leaderboard_entries')
+        .select('id', { count: 'exact', head: true })
+        .eq('standard', standard)
+        .eq('subject', subject)
+        .eq('entry_date', entry_date),
+      term
+    );
 
     let my_position = null;
     if (requesting_user_id) {
@@ -58,25 +62,28 @@ router.get('/:standard/:term/:subject', async (req, res) => {
       if (userInTop >= 0) {
         my_position = userInTop + 1;
       } else {
-        const { data: myEntry } = await getSupabase()
-          .from('leaderboard_entries')
-          .select('total_points')
-          .eq('user_id', requesting_user_id)
-          .eq('standard', standard)
-          .eq('term', term || null)
-          .eq('subject', subject)
-          .eq('entry_date', entry_date)
-          .single();
+        const { data: myEntry } = await applyTermFilter(
+          getSupabase()
+            .from('leaderboard_entries')
+            .select('total_points')
+            .eq('user_id', requesting_user_id)
+            .eq('standard', standard)
+            .eq('subject', subject)
+            .eq('entry_date', entry_date),
+          term
+        ).single();
 
         if (myEntry) {
-          const { count: above } = await getSupabase()
-            .from('leaderboard_entries')
-            .select('id', { count: 'exact', head: true })
-            .eq('standard', standard)
-            .eq('term', term || null)
-            .eq('subject', subject)
-            .eq('entry_date', entry_date)
-            .gt('total_points', myEntry.total_points);
+          const { count: above } = await applyTermFilter(
+            getSupabase()
+              .from('leaderboard_entries')
+              .select('id', { count: 'exact', head: true })
+              .eq('standard', standard)
+              .eq('subject', subject)
+              .eq('entry_date', entry_date)
+              .gt('total_points', myEntry.total_points),
+            term
+          );
           my_position = (above || 0) + 1;
         }
       }
@@ -126,14 +133,17 @@ router.get('/me/:user_id', authenticateToken, async (req, res) => {
     if (error) throw error;
 
     const boards = await Promise.all((entries || []).map(async e => {
-      const { count: above } = await getSupabase()
-        .from('leaderboard_entries')
-        .select('id', { count: 'exact', head: true })
-        .eq('standard', e.standard)
-        .eq('term', e.term || null)
-        .eq('subject', e.subject)
-        .eq('entry_date', entry_date)
-        .gt('total_points', e.total_points);
+      const entry_term = e.term ?? null;
+      const { count: above } = await applyTermFilter(
+        getSupabase()
+          .from('leaderboard_entries')
+          .select('id', { count: 'exact', head: true })
+          .eq('standard', e.standard)
+          .eq('subject', e.subject)
+          .eq('entry_date', entry_date)
+          .gt('total_points', e.total_points),
+        entry_term
+      );
 
       return {
         board_key: e.board_key,
@@ -324,25 +334,30 @@ router.post('/test/reset-board', async (req, res) => {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
+  const normalised_term = (!term || term === 'none') ? null : term;
   const entry_date = getTrinidadDate();
-  const board_key = getBoardKey(standard, term, subject);
+  const board_key = getBoardKey(standard, normalised_term, subject);
 
   try {
-    const { data: toDelete } = await getSupabase()
-      .from('leaderboard_entries')
-      .select('id')
-      .eq('standard', standard)
-      .eq('term', term || null)
-      .eq('subject', subject)
-      .eq('entry_date', entry_date);
+    const { data: toDelete } = await applyTermFilter(
+      getSupabase()
+        .from('leaderboard_entries')
+        .select('id')
+        .eq('standard', standard)
+        .eq('subject', subject)
+        .eq('entry_date', entry_date),
+      normalised_term
+    );
 
-    await getSupabase()
-      .from('leaderboard_entries')
-      .delete()
-      .eq('standard', standard)
-      .eq('term', term || null)
-      .eq('subject', subject)
-      .eq('entry_date', entry_date);
+    await applyTermFilter(
+      getSupabase()
+        .from('leaderboard_entries')
+        .delete()
+        .eq('standard', standard)
+        .eq('subject', subject)
+        .eq('entry_date', entry_date),
+      normalised_term
+    );
 
     return res.json({
       reset: true,
