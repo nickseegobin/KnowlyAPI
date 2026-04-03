@@ -59,13 +59,17 @@ noeyai-api/
 │   │   ├── overallInsight.js       ← POST /api/v1/overall-insight/:user_id
 │   │   ├── progress.js             ← GET /api/v1/progress/:user_id
 │   │   ├── catalogue.js            ← GET /api/v1/catalogue
-│   │   └── pool.js                 ← GET /api/v1/pool
+│   │   ├── pool.js                 ← GET /api/v1/pool
+│   │   ├── editorRead.js           ← GET /api/v1/editor-read/:package_id
+│   │   ├── editorSave.js           ← POST /api/v1/editor-save
+│   │   └── leaderboard.js          ← /api/v1/leaderboard/* (all leaderboard routes)
 │   └── services/
 │       ├── ai.js                   ← Anthropic Claude abstraction
 │       ├── embeddings.js           ← OpenAI text-embedding-3-small
 │       ├── examGenerator.js        ← Core generation logic + shuffle
 │       ├── pinecone.js             ← Vector DB query
-│       └── bufferManager.js        ← Background pool refill system
+│       ├── bufferManager.js        ← Background pool refill system
+│       └── leaderboard.js          ← Leaderboard upsert, nickname generation, scoring
 ├── .env                            ← Local environment variables
 ├── .gitignore
 └── package.json
@@ -174,6 +178,48 @@ Logs failed background generation attempts for retry.
 | `error_message` | TEXT | |
 | `attempted_at` | TIMESTAMPTZ | |
 | `retried` | BOOLEAN | Default false |
+
+### `user_profiles`
+One row per user. Stores the student's generated nickname and current standard/term.
+
+| Column | Type | Notes |
+|---|---|---|
+| `user_id` | TEXT PK | |
+| `nickname` | TEXT | Unique Caribbean-themed display name |
+| `standard` | TEXT | `std_4` or `std_5` |
+| `term` | TEXT | `term_1/2/3` or null for std_5 |
+| `updated_at` | TIMESTAMPTZ | |
+
+### `leaderboard_entries`
+One row per user per board per day (daily reset). Best score wins — updated only when a new attempt beats the current daily best.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | BIGINT PK | Auto-increment |
+| `user_id` | TEXT | |
+| `nickname` | TEXT | Denormalised from user_profiles |
+| `standard` | TEXT | |
+| `term` | TEXT | Null for std_5 |
+| `subject` | TEXT | |
+| `difficulty` | TEXT | Last difficulty played |
+| `board_key` | TEXT | e.g. `std_4_term_1_math` |
+| `total_points` | INT | Best daily score (correct count + difficulty bonus) |
+| `last_score_pct` | INT | Percentage from the best-scoring attempt |
+| `entry_date` | DATE | Trinidad date (`America/Port_of_Spain`) |
+| `updated_at` | TIMESTAMPTZ | |
+
+**Points formula:** `correct_count + (2 if hard, 1 if medium, 0 if easy)`
+
+### `leaderboard_archive`
+Snapshot of `leaderboard_entries` rows before each daily reset.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | BIGINT PK | Auto-increment |
+| `user_id`, `nickname`, `standard`, `term`, `subject` | TEXT | |
+| `total_points`, `last_score_pct` | INT | |
+| `board_date` | DATE | The date being archived |
+| `archived_at` | TIMESTAMPTZ | |
 
 ---
 
@@ -331,6 +377,7 @@ Railway picks up environment variable changes and redeploys automatically. For v
 | S3 | Exam lifecycle — submit, checkpoint, resume, cancel, insight, progress | ✅ Complete |
 | S3+ | Pool endpoint, catalogue, WP integration changes | ✅ Complete |
 | S3++ | Buffer system, shuffle, content codes, overall-insight | ✅ Complete |
+| S3+++ | Leaderboard system — daily boards, nicknames, points, editor endpoints | ✅ Complete |
 | S4 | WordPress integration — aep-core plugin, MemberPress, WooCommerce | 🔄 Next |
 | S5 | Quiz App JS renderer, timer, results screen | Pending |
 | S6 | Admin review queue, pool stats dashboard, UAT | Pending |

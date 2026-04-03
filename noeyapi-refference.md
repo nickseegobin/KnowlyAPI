@@ -385,6 +385,286 @@ Each object in `packages` is the raw `package_data` as stored in Supabase — no
 
 ---
 
+## GET /editor-read/:package_id
+
+Fetches a raw package from `exam_pool` by ID. Used by the admin editor to load a package for review or editing.
+
+**Headers**
+```
+Authorization: Bearer {JWT}
+X-AEP-Server-Key: {key}   ← required
+```
+
+**Response**
+```json
+{
+  "status": "found",
+  "package": { /* full package_data object including answer_sheet */ }
+}
+```
+
+Returns `404` if the package does not exist.
+
+---
+
+## POST /editor-save
+
+Saves a manually authored or edited exam package to `exam_pool` and `question_bank`. Rejects if the `package_id` already exists.
+
+**Headers**
+```
+Authorization: Bearer {JWT}
+X-AEP-Server-Key: {key}   ← required
+```
+
+**Request body** — full package object (same shape as `exam_pool.package_data`)
+
+```json
+{
+  "package_id": "pkg-std_4-term_1-math-easy-9999",
+  "version": "1.0",
+  "generated_at": "2026-04-01T10:00:00Z",
+  "meta": {
+    "standard": "std_4",
+    "term": "term_1",
+    "subject": "math",
+    "difficulty": "easy",
+    "status": "pending_review",
+    "uniqueness_score": 1,
+    "topics_covered": ["Fractions"]
+  },
+  "questions": [ ... ],
+  "answer_sheet": [ ... ]
+}
+```
+
+**Response**
+```json
+{
+  "status": "saved",
+  "package_id": "pkg-std_4-term_1-math-easy-9999",
+  "saved_at": "2026-04-01T10:00:00.000Z"
+}
+```
+
+Returns `409` if `package_id` already exists. `source` is set to `"manual"` automatically.
+
+---
+
+## GET /leaderboard/:standard/:term/:subject
+
+Returns the daily top-10 leaderboard for a board. No auth required. If a valid JWT is included, `my_position` and `is_current_user` are populated.
+
+Use `"none"` as the `term` path segment for std_5 boards.
+
+**Response**
+```json
+{
+  "board_key": "std_4_term_1_math",
+  "standard": "std_4",
+  "term": "term_1",
+  "subject": "math",
+  "date": "2026-04-02",
+  "total_participants": 42,
+  "my_position": 3,
+  "entries": [
+    {
+      "rank": 1,
+      "nickname": "CoralBolt",
+      "total_points": 32,
+      "last_score_pct": 100,
+      "is_current_user": false
+    }
+  ]
+}
+```
+
+---
+
+## GET /leaderboard/me/:user_id
+
+Returns the current user's rank across all boards they appear on today.
+
+**Headers**
+```
+Authorization: Bearer {JWT}
+```
+
+**Response**
+```json
+{
+  "user_id": "user_123",
+  "standard": "std_4",
+  "term": "term_1",
+  "date": "2026-04-02",
+  "boards": [
+    {
+      "board_key": "std_4_term_1_math",
+      "subject": "math",
+      "total_points": 28,
+      "last_score_pct": 90,
+      "rank": 3
+    }
+  ]
+}
+```
+
+---
+
+## POST /leaderboard/upsert
+
+Updates or creates the user's leaderboard entry for the current day. Only updates if the new attempt beats the current daily best. Called by WordPress after exam submission.
+
+**Headers**
+```
+X-AEP-Server-Key: {key}   ← required
+```
+
+**Request body**
+```json
+{
+  "user_id": "user_123",
+  "nickname": "CoralBolt",
+  "standard": "std_4",
+  "term": "term_1",
+  "subject": "math",
+  "difficulty": "easy",
+  "correct_count": 18,
+  "score_pct": 90
+}
+```
+
+Alternatively pass `"points"` directly to override the calculated value.
+
+**Points formula:** `correct_count + (2 if hard, 1 if medium, 0 if easy)`
+
+**Response**
+```json
+{
+  "was_updated": true,
+  "total_points_today": 18,
+  "previous_rank": 5,
+  "new_rank": 3,
+  "board_key": "std_4_term_1_math"
+}
+```
+
+---
+
+## POST /leaderboard/generate-nickname
+
+Generates and assigns a unique Caribbean-themed nickname to a user. No-ops if the user already has a nickname.
+
+**Headers**
+```
+Authorization: Bearer {JWT}
+X-AEP-Server-Key: {key}   ← required
+```
+
+**Request body**
+```json
+{
+  "user_id": "user_123",
+  "standard": "std_4",
+  "term": "term_1"
+}
+```
+
+**Response**
+```json
+{
+  "user_id": "user_123",
+  "nickname": "CoralBolt",
+  "is_new": true
+}
+```
+
+`is_new` is `false` if the user already had a nickname (existing nickname returned unchanged).
+
+---
+
+## POST /leaderboard/regenerate-nickname
+
+Generates a new nickname for a user, replacing their old one. Updates all leaderboard entries to reflect the new nickname.
+
+**Headers**
+```
+Authorization: Bearer {JWT}
+X-AEP-Server-Key: {key}   ← required
+```
+
+**Request body**
+```json
+{
+  "user_id": "user_123"
+}
+```
+
+**Response**
+```json
+{
+  "user_id": "user_123",
+  "old_nickname": "CoralBolt",
+  "new_nickname": "TurboMango",
+  "updated_at": "2026-04-02T10:00:00.000Z"
+}
+```
+
+---
+
+## POST /leaderboard/reset
+
+Archives all current leaderboard entries to `leaderboard_archive` then clears `leaderboard_entries`. Called at daily reset (midnight Trinidad time).
+
+**Headers**
+```
+X-AEP-Server-Key: {key}   ← required
+```
+
+**Response**
+```json
+{
+  "entries_cleared": 84,
+  "boards_cleared": 12,
+  "reset_at": "2026-04-02T04:00:00.000Z"
+}
+```
+
+---
+
+## POST /leaderboard/test/inject
+
+Injects a test leaderboard entry. For testing only.
+
+**Headers**
+```
+X-AEP-Server-Key: {key}   ← required
+```
+
+**Request body** — same as `/leaderboard/upsert` with optional `user_id`, `nickname`, `points` overrides.
+
+---
+
+## POST /leaderboard/test/reset-board
+
+Clears all entries for a specific board on the current day without archiving. For testing only.
+
+**Headers**
+```
+X-AEP-Server-Key: {key}   ← required
+```
+
+**Request body**
+```json
+{
+  "standard": "std_4",
+  "term": "term_1",
+  "subject": "math"
+}
+```
+
+---
+
 ## Error Responses
 
 All errors follow this shape:
