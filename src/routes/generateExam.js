@@ -67,32 +67,6 @@ router.post('/', authenticateToken, async (req, res) => {
 
   try {
     // ── Get or initialise user sequence pointer ────────────────────────────
-    const progressKey = {
-      user_id,
-      curriculum,
-      level,
-      period: period || null,
-      subject,
-      trial_type,
-      difficulty: difficulty || null,
-      topic: topic || null
-    };
-
-    let { data: progressRow, error: progressError } = await getSupabase()
-      .from('user_progress')
-      .select('id, next_package_index')
-      .eq('user_id', user_id)
-      .eq('curriculum', curriculum)
-      .eq('level', level)
-      .eq('subject', subject)
-      .eq('trial_type', trial_type)
-      .is('period', period || null)
-      .is('difficulty', difficulty || null)
-      .is('topic', topic || null)
-      .single();
-
-    // Use .eq() if values are non-null, otherwise .is() above handles it.
-    // Re-query using proper null handling:
     let progressQuery = getSupabase()
       .from('user_progress')
       .select('id, next_package_index')
@@ -121,7 +95,7 @@ router.post('/', authenticateToken, async (req, res) => {
     }
 
     const { data: progressRows } = await progressQuery;
-    progressRow = progressRows?.[0] || null;
+    const progressRow = progressRows?.[0] || null;
 
     const nextIndex = progressRow?.next_package_index || 0;
 
