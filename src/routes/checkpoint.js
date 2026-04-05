@@ -4,10 +4,25 @@ const { authenticateToken } = require('../middleware/auth');
 const getSupabase = require('../config/supabase');
 
 router.post('/', authenticateToken, async (req, res) => {
-  const { session_id, user_id, package_id, current_question_index, time_remaining_seconds, answers_so_far, standard, term, subject, difficulty } = req.body;
+  const {
+    session_id,
+    user_id,
+    package_id,
+    current_question_index,
+    time_remaining_seconds,
+    answers_so_far,
+    curriculum = 'tt_primary',
+    level,
+    period = null,
+    subject,
+    difficulty = null,
+    trial_type = 'practice',
+    topic = null,
+    source = 'direct'
+  } = req.body;
 
   if (!session_id || !user_id || !package_id) {
-    return res.status(400).json({ error: 'Missing required fields' });
+    return res.status(400).json({ error: 'Missing required fields', code: 'missing_fields' });
   }
 
   try {
@@ -17,10 +32,14 @@ router.post('/', authenticateToken, async (req, res) => {
         session_id,
         user_id,
         package_id,
-        standard: standard || 'std_4',
-        term: term || null,
+        curriculum,
+        level: level || 'std_4',
+        period: period || null,
         subject: subject || 'unknown',
-        difficulty: difficulty || 'medium',
+        difficulty: difficulty || null,
+        trial_type,
+        topic: topic || null,
+        source,
         state: 'active',
         time_remaining: time_remaining_seconds,
         checkpoint_data: {
@@ -38,8 +57,8 @@ router.post('/', authenticateToken, async (req, res) => {
     });
 
   } catch (err) {
-    console.error('Checkpoint error:', err);
-    return res.status(500).json({ error: 'Failed to save checkpoint', details: err.message });
+    console.error('[checkpoint] Error:', err);
+    return res.status(500).json({ error: 'Failed to save checkpoint', code: 'server_error', details: err.message });
   }
 });
 

@@ -1,8 +1,10 @@
-# NoeyAI API Reference
+# Knowly API Reference
 
-**Base URL:** `https://noeyai-api-production.up.railway.app/api/v1`  
+**Base URL:** `https://knowly-api-production.up.railway.app/api/v1`  
 **Auth:** `Authorization: Bearer {JWT}` required on all endpoints except `/health`  
 **Server mode:** Add `X-AEP-Server-Key: {AEP_SERVER_KEY}` to receive full packages including `answer_sheet`
+
+**Note:** This document reflects Block 1 changes — `standard` is now `level`, `term` is now `period`, and `completed_package_ids` is deprecated (sequential pool model replaces it).
 
 ---
 
@@ -15,7 +17,7 @@ Public. No auth required.
 {
   "status": "ok",
   "version": "1.0.0",
-  "service": "NoeyAI Exam Platform API",
+  "service": "Knowly Exam Platform API",
   "timestamp": "2026-03-21T00:00:00.000Z"
 }
 ```
@@ -35,22 +37,34 @@ X-AEP-Server-Key: {key}   ← optional, unlocks answer_sheet
 **Request body**
 ```json
 {
-  "standard": "std_4",
-  "term": "term_1",
+  "curriculum": "tt_primary",
+  "level": "std_4",
+  "period": "term_1",
   "subject": "math",
   "difficulty": "easy",
-  "completed_package_ids": ["pkg-std_4-term_1-math-easy-1234"]
+  "trial_type": "practice"
 }
 ```
 
 | Field | Required | Values |
 |---|---|---|
-| `standard` | ✅ | `std_4`, `std_5` |
-| `term` | ✅ for std_4 | `term_1`, `term_2`, `term_3` |
+| `curriculum` | ✅ | `tt_primary` (more coming) |
+| `level` | ✅ | `std_4`, `std_5` |
+| `period` | ✅ for non-capstone | `term_1`, `term_2`, `term_3`, `null` for capstone |
 | `subject` | ✅ | `math`, `english`, `science`, `social_studies` |
-| `difficulty` | ✅ | `easy`, `medium`, `hard` |
+| `difficulty` | ✅ for practice | `easy`, `medium`, `hard`, `null` for sea_paper |
+| `trial_type` | ✅ | `practice`, `sea_paper` |
+| `topic` | ❌ | Required for capstone topic practice |
 | `user_id` | ❌ | Optional, not stored |
-| `completed_package_ids` | ❌ | Array of package IDs to exclude from pool |
+
+**Question Counts (per Section 5.2)**
+| Difficulty | Questions | Time per Q | Total Time |
+|---|---|---|---|
+| Easy | 10 | 90s | 15 min |
+| Medium | 15 | 90s | 22 min |
+| Hard | 20 | 90s | 30 min |
+| SEA Paper (Math) | 40 | 90s | 60 min |
+| SEA Paper (ELA) | 36 | 90s | 54 min |
 
 **Response (student — no answer_sheet)**
 ```json
@@ -145,11 +159,13 @@ Saves current exam state. Call on every question navigation to protect against c
 {
   "session_id": "sess_abc123",
   "user_id": "user_123",
-  "package_id": "pkg-std_4-term_1-english-easy-7604",
-  "standard": "std_4",
-  "term": "term_1",
+  "package_id": "pkg-tt_primary-std_4-term_1-english-easy-7604",
+  "curriculum": "tt_primary",
+  "level": "std_4",
+  "period": "term_1",
   "subject": "english",
   "difficulty": "easy",
+  "trial_type": "practice",
   "current_question_index": 12,
   "time_remaining_seconds": 2140,
   "answers_so_far": [
@@ -222,7 +238,9 @@ Generates a Claude coaching note based on topic breakdown from a single exam. 3�
 ```json
 {
   "user_id": "user_123",
-  "standard": "std_4",
+  "curriculum": "tt_primary",
+  "level": "std_4",
+  "period": "term_1",
   "subject": "english",
   "topic_breakdown": [
     { "topic": "Oral Communication", "correct": 4, "total": 5, "percentage": 80 },
@@ -249,8 +267,9 @@ Generates a Claude weekly coaching report across multiple subjects and exams. 4�
 ```json
 {
   "student": {
-    "standard": "std_4",
-    "term": "term_1"
+    "curriculum": "tt_primary",
+    "level": "std_4",
+    "period": "term_1"
   },
   "period": {
     "week": "2026-W12",
@@ -325,31 +344,35 @@ Returns aggregated stats for a user across all completed exams.
 
 ## GET /catalogue
 
-Public pool inventory. Returns all possible standard × term × subject × difficulty combinations with live pool counts. No auth required.
+Public pool inventory. Returns all possible curriculum × level × period × subject × difficulty combinations with live pool counts. No auth required.
 
 **Response**
 ```json
 [
   {
-    "standard": "std_4",
-    "term": "term_1",
+    "curriculum": "tt_primary",
+    "level": "std_4",
+    "period": "term_1",
     "subject": "math",
     "difficulty": "easy",
+    "trial_type": "practice",
     "available_count": 2,
     "latest_generated_at": "2026-03-21T00:02:28Z"
   },
   {
-    "standard": "std_5",
-    "term": null,
+    "curriculum": "tt_primary",
+    "level": "std_5",
+    "period": null,
     "subject": "social_studies",
     "difficulty": "medium",
+    "trial_type": "practice",
     "available_count": 0,
     "latest_generated_at": null
   }
 ]
 ```
 
-Returns 48 combinations total — 4 subjects × 3 terms × 3 difficulties for std_4, plus 4 subjects × 3 difficulties for std_5.
+Returns combinations based on curriculum config — 4 subjects × 3 periods × 3 difficulties for std_4, plus 4 subjects × topics × 3 difficulties for std_5 topic practice, plus SEA papers where applicable.
 
 ---
 
@@ -421,14 +444,17 @@ X-AEP-Server-Key: {key}   ← required
 
 ```json
 {
-  "package_id": "pkg-std_4-term_1-math-easy-9999",
-  "version": "1.0",
+  "package_id": "pkg-tt_primary-std_4-term_1-math-easy-9999",
+  "version": "2.0",
   "generated_at": "2026-04-01T10:00:00Z",
+  "curriculum": "tt_primary",
   "meta": {
-    "standard": "std_4",
-    "term": "term_1",
+    "curriculum": "tt_primary",
+    "level": "std_4",
+    "period": "term_1",
     "subject": "math",
     "difficulty": "easy",
+    "trial_type": "practice",
     "status": "pending_review",
     "uniqueness_score": 1,
     "topics_covered": ["Fractions"]
@@ -451,18 +477,19 @@ Returns `409` if `package_id` already exists. `source` is set to `"manual"` auto
 
 ---
 
-## GET /leaderboard/:standard/:term/:subject
+## GET /leaderboard/:level/:period/:subject
 
 Returns the daily top-10 leaderboard for a board. No auth required. If a valid JWT is included, `my_position` and `is_current_user` are populated.
 
-Use `"none"` as the `term` path segment for std_5 boards.
+Use `"none"` as the `period` path segment for capstone level boards (e.g., std_5).
 
 **Response**
 ```json
 {
-  "board_key": "std_4_term_1_math",
-  "standard": "std_4",
-  "term": "term_1",
+  "board_key": "std_4:term_1:math",
+  "curriculum": "tt_primary",
+  "level": "std_4",
+  "period": "term_1",
   "subject": "math",
   "date": "2026-04-02",
   "total_participants": 42,
@@ -494,12 +521,13 @@ Authorization: Bearer {JWT}
 ```json
 {
   "user_id": "user_123",
-  "standard": "std_4",
-  "term": "term_1",
+  "curriculum": "tt_primary",
+  "level": "std_4",
+  "period": "term_1",
   "date": "2026-04-02",
   "boards": [
     {
-      "board_key": "std_4_term_1_math",
+      "board_key": "std_4:term_1:math",
       "subject": "math",
       "total_points": 28,
       "last_score_pct": 90,
@@ -525,8 +553,9 @@ X-AEP-Server-Key: {key}   ← required
 {
   "user_id": "user_123",
   "nickname": "CoralBolt",
-  "standard": "std_4",
-  "term": "term_1",
+  "curriculum": "tt_primary",
+  "level": "std_4",
+  "period": "term_1",
   "subject": "math",
   "difficulty": "easy",
   "correct_count": 18,
@@ -545,7 +574,7 @@ Alternatively pass `"points"` directly to override the calculated value.
   "total_points_today": 18,
   "previous_rank": 5,
   "new_rank": 3,
-  "board_key": "std_4_term_1_math"
+  "board_key": "std_4:term_1:math"
 }
 ```
 
@@ -565,8 +594,9 @@ X-AEP-Server-Key: {key}   ← required
 ```json
 {
   "user_id": "user_123",
-  "standard": "std_4",
-  "term": "term_1"
+  "curriculum": "tt_primary",
+  "level": "std_4",
+  "period": "term_1"
 }
 ```
 
@@ -687,16 +717,16 @@ All errors follow this shape:
 
 ## Curriculum Coverage
 
-### Standard 4 (term-scoped)
+### Standard 4 (period-scoped)
 
-| Subject | Terms |
+| Subject | Periods |
 |---|---|
 | Mathematics | term_1, term_2, term_3 |
 | English Language Arts | term_1, term_2, term_3 |
 | Science | term_1, term_2, term_3 |
 | Social Studies | term_1, term_2, term_3 |
 
-### Standard 5 (SEA prep, no term)
+### Standard 5 (SEA prep, capstone - no period)
 
 | Subject |
 |---|
@@ -735,31 +765,31 @@ node -e "require('dotenv').config(); const jwt = require('jsonwebtoken'); consol
 
 ```bash
 # Health check
-curl https://noeyai-api-production.up.railway.app/api/v1/health
+curl https://knowly-api-production.up.railway.app/api/v1/health
 
 # Catalogue
-curl https://noeyai-api-production.up.railway.app/api/v1/catalogue
+curl https://knowly-api-production.up.railway.app/api/v1/catalogue
 
 # Generate exam (student)
-curl -X POST https://noeyai-api-production.up.railway.app/api/v1/generate-exam \
+curl -X POST https://knowly-api-production.up.railway.app/api/v1/generate-exam \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer {JWT}" \
-  -d '{"standard":"std_4","term":"term_1","subject":"math","difficulty":"easy"}'
+  -d '{"curriculum":"tt_primary","level":"std_4","period":"term_1","subject":"math","difficulty":"easy","trial_type":"practice"}'
 
 # Generate exam (server — includes answer_sheet)
-curl -X POST https://noeyai-api-production.up.railway.app/api/v1/generate-exam \
+curl -X POST https://knowly-api-production.up.railway.app/api/v1/generate-exam \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer {JWT}" \
-  -H "X-AEP-Server-Key: noeyai_aep_server_key_2026_prod" \
-  -d '{"standard":"std_4","term":"term_1","subject":"math","difficulty":"easy"}'
+  -H "X-AEP-Server-Key: knowly_aep_server_key_2026_prod" \
+  -d '{"curriculum":"tt_primary","level":"std_4","period":"term_1","subject":"math","difficulty":"easy","trial_type":"practice"}'
 
 # Pool (server)
-curl "https://noeyai-api-production.up.railway.app/api/v1/pool?status=approved&limit=50&offset=0" \
+curl "https://knowly-api-production.up.railway.app/api/v1/pool?status=approved&limit=50&offset=0" \
   -H "Authorization: Bearer {JWT}" \
-  -H "X-AEP-Server-Key: noeyai_aep_server_key_2026_prod"
+  -H "X-AEP-Server-Key: knowly_aep_server_key_2026_prod"
 
 # Progress
-curl https://noeyai-api-production.up.railway.app/api/v1/progress/user_123 \
+curl https://knowly-api-production.up.railway.app/api/v1/progress/user_123 \
   -H "Authorization: Bearer {JWT}"
 ```
 
@@ -779,7 +809,7 @@ SET status = 'approved', approved_at = NOW()
 WHERE status = 'pending_review';
 
 -- Check pool inventory
-SELECT standard, term, subject, difficulty, status, source, times_served, generated_at
+SELECT curriculum, level, period, subject, difficulty, trial_type, status, source, times_served, generated_at
 FROM exam_pool
 ORDER BY generated_at DESC;
 

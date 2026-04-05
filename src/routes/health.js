@@ -5,7 +5,7 @@ router.get('/', (req, res) => {
   res.json({
     status: 'ok',
     version: '1.0.0',
-    service: 'NoeyAI Exam Platform API',
+    service: 'Knowly Exam Platform API',
     timestamp: new Date().toISOString()
   });
 });

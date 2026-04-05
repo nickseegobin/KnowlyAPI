@@ -1,21 +1,23 @@
-    const express = require('express');
+const express = require('express');
 const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
 const { generateContent } = require('../services/ai');
 
 router.post('/', authenticateToken, async (req, res) => {
-  const { user_id, standard, subject, topic_breakdown } = req.body;
+  const { user_id, level, subject, topic_breakdown } = req.body;
 
-  if (!user_id || !standard || !subject || !topic_breakdown) {
-    return res.status(400).json({ error: 'Missing required fields' });
+  if (!user_id || !level || !subject || !topic_breakdown) {
+    return res.status(400).json({ error: 'Missing required fields', code: 'missing_fields' });
   }
 
   try {
+    const levelLabel = level === 'std_4' ? 'Standard 4' : level === 'std_5' ? 'Standard 5 SEA Prep' : level;
+
     const topicSummary = topic_breakdown
       .map(t => `- ${t.topic}: ${t.percentage}% (${t.correct}/${t.total})`)
       .join('\n');
 
-    const prompt = `You are a friendly Caribbean primary school tutor. A student just completed a ${subject} exam for ${standard === 'std_4' ? 'Standard 4' : 'Standard 5 SEA Prep'}.
+    const prompt = `You are a friendly Caribbean primary school tutor. A student just completed a ${subject} trial for ${levelLabel}.
 
 Their topic results:
 ${topicSummary}
@@ -32,8 +34,8 @@ Be warm, direct, and use simple language appropriate for a primary school studen
     return res.json({ insight: insight.trim() });
 
   } catch (err) {
-    console.error('Insight error:', err);
-    return res.status(500).json({ error: 'Failed to generate insight', details: err.message });
+    console.error('[insight] Error:', err);
+    return res.status(500).json({ error: 'Failed to generate insight', code: 'server_error', details: err.message });
   }
 });
 

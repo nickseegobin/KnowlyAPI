@@ -2,23 +2,24 @@ const express = require('express');
 const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
 const getSupabase = require('../config/supabase');
-const { getTrinidadDate, getBoardKey, generateNickname, upsertLeaderboardEntry, applyTermFilter } = require('../services/leaderboard');
+const { getTrinidadDate, getBoardKey, generateNickname, upsertLeaderboardEntry, applyPeriodFilter } = require('../services/leaderboard');
 
 function requireServerKey(req, res) {
   const serverKey = req.headers['x-aep-server-key'];
   if (!serverKey || serverKey !== process.env.AEP_SERVER_KEY) {
-    res.status(401).json({ error: 'Server key required' });
+    res.status(401).json({ error: 'Server key required', code: 'unauthorized' });
     return false;
   }
   return true;
 }
 
-// GET /api/v1/leaderboard/:standard/:term/:subject
-router.get('/:standard/:term/:subject', async (req, res) => {
-  const { standard, subject } = req.params;
-  const term = req.params.term === 'none' ? null : req.params.term;
+// GET /api/v1/leaderboard/:level/:period/:subject
+// Pass 'none' as period for capstone-level boards (std_5)
+router.get('/:level/:period/:subject', async (req, res) => {
+  const { level, subject } = req.params;
+  const period = req.params.period === 'none' ? null : req.params.period;
   const entry_date = getTrinidadDate();
-  const board_key = getBoardKey(standard, term, subject);
+  const board_key = getBoardKey(level, period, subject);
 
   let requesting_user_id = null;
   try {
@@ -32,28 +33,28 @@ router.get('/:standard/:term/:subject', async (req, res) => {
   } catch (_) {}
 
   try {
-    const { data: entries, error } = await applyTermFilter(
+    const { data: entries, error } = await applyPeriodFilter(
       getSupabase()
         .from('leaderboard_entries')
         .select('user_id, nickname, total_points, last_score_pct')
-        .eq('standard', standard)
+        .eq('level', level)
         .eq('subject', subject)
         .eq('entry_date', entry_date)
         .order('total_points', { ascending: false })
         .limit(10),
-      term
+      period
     );
 
     if (error) throw error;
 
-    const { count: total_participants } = await applyTermFilter(
+    const { count: total_participants } = await applyPeriodFilter(
       getSupabase()
         .from('leaderboard_entries')
         .select('id', { count: 'exact', head: true })
-        .eq('standard', standard)
+        .eq('level', level)
         .eq('subject', subject)
         .eq('entry_date', entry_date),
-      term
+      period
     );
 
     let my_position = null;
@@ -62,27 +63,27 @@ router.get('/:standard/:term/:subject', async (req, res) => {
       if (userInTop >= 0) {
         my_position = userInTop + 1;
       } else {
-        const { data: myEntry } = await applyTermFilter(
+        const { data: myEntry } = await applyPeriodFilter(
           getSupabase()
             .from('leaderboard_entries')
             .select('total_points')
             .eq('user_id', requesting_user_id)
-            .eq('standard', standard)
+            .eq('level', level)
             .eq('subject', subject)
             .eq('entry_date', entry_date),
-          term
+          period
         ).single();
 
         if (myEntry) {
-          const { count: above } = await applyTermFilter(
+          const { count: above } = await applyPeriodFilter(
             getSupabase()
               .from('leaderboard_entries')
               .select('id', { count: 'exact', head: true })
-              .eq('standard', standard)
+              .eq('level', level)
               .eq('subject', subject)
               .eq('entry_date', entry_date)
               .gt('total_points', myEntry.total_points),
-            term
+            period
           );
           my_position = (above || 0) + 1;
         }
@@ -91,24 +92,24 @@ router.get('/:standard/:term/:subject', async (req, res) => {
 
     return res.json({
       board_key,
-      standard,
-      term: term || null,
+      level,
+      period: period || null,
       subject,
-      date: entry_date,
+      entry_date,
       total_participants: total_participants || 0,
       my_position,
       entries: (entries || []).map((e, i) => ({
         rank: i + 1,
+        user_id: e.user_id,
         nickname: e.nickname,
         total_points: e.total_points,
-        last_score_pct: e.last_score_pct,
-        is_current_user: e.user_id === requesting_user_id
+        last_score_pct: e.last_score_pct
       }))
     });
 
   } catch (err) {
-    console.error('Leaderboard error:', err);
-    return res.status(500).json({ error: 'Failed to fetch leaderboard', details: err.message });
+    console.error('[leaderboard] GET error:', err);
+    return res.status(500).json({ error: 'Failed to fetch leaderboard', code: 'server_error', details: err.message });
   }
 });
 
@@ -118,53 +119,18 @@ router.get('/me/:user_id', authenticateToken, async (req, res) => {
   const entry_date = getTrinidadDate();
 
   try {
-    const { data: profile } = await getSupabase()
-      .from('user_profiles')
-      .select('standard, term')
-      .eq('user_id', user_id)
-      .single();
-
     const { data: entries, error } = await getSupabase()
       .from('leaderboard_entries')
-      .select('board_key, subject, total_points, last_score_pct, standard, term')
+      .select('level, period, subject, total_points, last_score_pct, board_key, entry_date')
       .eq('user_id', user_id)
       .eq('entry_date', entry_date);
 
     if (error) throw error;
 
-    const boards = await Promise.all((entries || []).map(async e => {
-      const entry_term = e.term ?? null;
-      const { count: above } = await applyTermFilter(
-        getSupabase()
-          .from('leaderboard_entries')
-          .select('id', { count: 'exact', head: true })
-          .eq('standard', e.standard)
-          .eq('subject', e.subject)
-          .eq('entry_date', entry_date)
-          .gt('total_points', e.total_points),
-        entry_term
-      );
-
-      return {
-        board_key: e.board_key,
-        subject: e.subject,
-        total_points: e.total_points,
-        last_score_pct: e.last_score_pct,
-        rank: (above || 0) + 1
-      };
-    }));
-
-    return res.json({
-      user_id,
-      standard: profile?.standard || null,
-      term: profile?.term || null,
-      date: entry_date,
-      boards
-    });
-
+    return res.json({ user_id, entry_date, boards: entries || [] });
   } catch (err) {
-    console.error('Leaderboard me error:', err);
-    return res.status(500).json({ error: 'Failed to fetch personal boards', details: err.message });
+    console.error('[leaderboard] me error:', err);
+    return res.status(500).json({ error: 'Failed to fetch user leaderboard', code: 'server_error', details: err.message });
   }
 });
 
@@ -172,9 +138,9 @@ router.get('/me/:user_id', authenticateToken, async (req, res) => {
 router.post('/generate-nickname', authenticateToken, async (req, res) => {
   if (!requireServerKey(req, res)) return;
 
-  const { user_id, standard, term } = req.body;
-  if (!user_id || !standard) {
-    return res.status(400).json({ error: 'Missing required fields' });
+  const { user_id, curriculum = 'tt_primary', level, period } = req.body;
+  if (!user_id || !level) {
+    return res.status(400).json({ error: 'Missing required fields', code: 'missing_fields' });
   }
 
   try {
@@ -192,16 +158,20 @@ router.post('/generate-nickname', authenticateToken, async (req, res) => {
 
     await getSupabase().from('user_profiles').insert({
       user_id,
+      curriculum,
+      level,
+      period: period || null,
       nickname,
-      standard,
-      term: term || null
+      gem_balance: 0,
+      total_gems_received: 0,
+      total_gems_spent: 0
     });
 
     return res.json({ user_id, nickname, is_new: true });
 
   } catch (err) {
-    console.error('Generate nickname error:', err);
-    return res.status(500).json({ error: 'Failed to generate nickname', details: err.message });
+    console.error('[leaderboard] generate-nickname error:', err);
+    return res.status(500).json({ error: 'Failed to generate nickname', code: 'server_error', details: err.message });
   }
 });
 
@@ -211,7 +181,7 @@ router.post('/regenerate-nickname', authenticateToken, async (req, res) => {
 
   const { user_id } = req.body;
   if (!user_id) {
-    return res.status(400).json({ error: 'Missing user_id' });
+    return res.status(400).json({ error: 'Missing user_id', code: 'missing_fields' });
   }
 
   try {
@@ -222,7 +192,7 @@ router.post('/regenerate-nickname', authenticateToken, async (req, res) => {
       .single();
 
     if (!profile) {
-      return res.status(404).json({ error: 'User profile not found' });
+      return res.status(404).json({ error: 'User profile not found', code: 'not_found' });
     }
 
     const old_nickname = profile.nickname;
@@ -242,8 +212,8 @@ router.post('/regenerate-nickname', authenticateToken, async (req, res) => {
     return res.json({ user_id, old_nickname, new_nickname, updated_at });
 
   } catch (err) {
-    console.error('Regenerate nickname error:', err);
-    return res.status(500).json({ error: 'Failed to regenerate nickname', details: err.message });
+    console.error('[leaderboard] regenerate-nickname error:', err);
+    return res.status(500).json({ error: 'Failed to regenerate nickname', code: 'server_error', details: err.message });
   }
 });
 
@@ -254,8 +224,8 @@ router.post('/upsert', async (req, res) => {
     const result = await upsertLeaderboardEntry(req.body);
     res.json(result);
   } catch (err) {
-    console.error('[leaderboard] upsert failed', err.stack);
-    res.status(500).json({ error: err.message });
+    console.error('[leaderboard] upsert error:', err.stack);
+    res.status(500).json({ error: err.message, code: 'server_error' });
   }
 });
 
@@ -266,7 +236,7 @@ router.post('/reset', async (req, res) => {
   try {
     const { data: toArchive, error: fetchError } = await getSupabase()
       .from('leaderboard_entries')
-      .select('user_id, nickname, standard, term, subject, total_points, last_score_pct, entry_date');
+      .select('user_id, nickname, curriculum, level, period, subject, total_points, last_score_pct, entry_date');
 
     if (fetchError) throw fetchError;
 
@@ -274,8 +244,9 @@ router.post('/reset', async (req, res) => {
       const archiveRows = toArchive.map(e => ({
         user_id: e.user_id,
         nickname: e.nickname,
-        standard: e.standard,
-        term: e.term,
+        curriculum: e.curriculum || 'tt_primary',
+        level: e.level,
+        period: e.period,
         subject: e.subject,
         total_points: e.total_points,
         last_score_pct: e.last_score_pct,
@@ -285,7 +256,7 @@ router.post('/reset', async (req, res) => {
       await getSupabase().from('leaderboard_archive').insert(archiveRows);
     }
 
-    const boardSet = new Set((toArchive || []).map(e => getBoardKey(e.standard, e.term, e.subject)));
+    const boardSet = new Set((toArchive || []).map(e => getBoardKey(e.level, e.period, e.subject)));
 
     await getSupabase()
       .from('leaderboard_entries')
@@ -299,8 +270,8 @@ router.post('/reset', async (req, res) => {
     });
 
   } catch (err) {
-    console.error('Leaderboard reset error:', err);
-    return res.status(500).json({ error: 'Failed to reset leaderboard', details: err.message });
+    console.error('[leaderboard] reset error:', err);
+    return res.status(500).json({ error: 'Failed to reset leaderboard', code: 'server_error', details: err.message });
   }
 });
 
@@ -311,17 +282,19 @@ router.post('/test/inject', async (req, res) => {
     const result = await upsertLeaderboardEntry({
       user_id:    req.body.user_id || `test_${Date.now()}`,
       nickname:   req.body.nickname,
-      standard:   req.body.standard,
-      term:       req.body.term || null,
+      curriculum: req.body.curriculum || 'tt_primary',
+      level:      req.body.level,
+      period:     req.body.period || null,
       subject:    req.body.subject,
       difficulty: req.body.difficulty || 'easy',
+      trial_type: req.body.trial_type || 'practice',
       points:     req.body.points,
       score_pct:  req.body.score_pct
     });
     res.json({ injected: true, ...result });
   } catch (err) {
-    console.error('[leaderboard] test inject failed', err.stack);
-    res.status(500).json({ error: err.message });
+    console.error('[leaderboard] test inject error:', err.stack);
+    res.status(500).json({ error: err.message, code: 'server_error' });
   }
 });
 
@@ -329,34 +302,34 @@ router.post('/test/inject', async (req, res) => {
 router.post('/test/reset-board', async (req, res) => {
   if (!requireServerKey(req, res)) return;
 
-  const { standard, term, subject } = req.body;
-  if (!standard || !subject) {
-    return res.status(400).json({ error: 'Missing required fields' });
+  const { level, period, subject } = req.body;
+  if (!level || !subject) {
+    return res.status(400).json({ error: 'Missing required fields', code: 'missing_fields' });
   }
 
-  const normalised_term = (!term || term === 'none') ? null : term;
+  const normalised_period = (!period || period === 'none') ? null : period;
   const entry_date = getTrinidadDate();
-  const board_key = getBoardKey(standard, normalised_term, subject);
+  const board_key = getBoardKey(level, normalised_period, subject);
 
   try {
-    const { data: toDelete } = await applyTermFilter(
+    const { data: toDelete } = await applyPeriodFilter(
       getSupabase()
         .from('leaderboard_entries')
         .select('id')
-        .eq('standard', standard)
+        .eq('level', level)
         .eq('subject', subject)
         .eq('entry_date', entry_date),
-      normalised_term
+      normalised_period
     );
 
-    await applyTermFilter(
+    await applyPeriodFilter(
       getSupabase()
         .from('leaderboard_entries')
         .delete()
-        .eq('standard', standard)
+        .eq('level', level)
         .eq('subject', subject)
         .eq('entry_date', entry_date),
-      normalised_term
+      normalised_period
     );
 
     return res.json({
@@ -366,8 +339,8 @@ router.post('/test/reset-board', async (req, res) => {
     });
 
   } catch (err) {
-    console.error('Reset board error:', err);
-    return res.status(500).json({ error: 'Failed to reset board', details: err.message });
+    console.error('[leaderboard] reset-board error:', err);
+    return res.status(500).json({ error: 'Failed to reset board', code: 'server_error', details: err.message });
   }
 });
 

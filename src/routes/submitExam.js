@@ -5,10 +5,10 @@ const getSupabase = require('../config/supabase');
 const crypto = require('crypto');
 
 router.post('/', authenticateToken, async (req, res) => {
-  const { package_id, user_id, state, time_elapsed_seconds, time_remaining_seconds, answers } = req.body;
+  const { package_id, user_id, source = 'direct', time_elapsed_seconds, time_remaining_seconds, answers } = req.body;
 
   if (!package_id || !user_id || !answers) {
-    return res.status(400).json({ error: 'Missing required fields' });
+    return res.status(400).json({ error: 'Missing required fields', code: 'missing_fields' });
   }
 
   try {
@@ -19,11 +19,12 @@ router.post('/', authenticateToken, async (req, res) => {
       .single();
 
     if (pkgError || !pkgData) {
-      return res.status(404).json({ error: 'Package not found' });
+      return res.status(404).json({ error: 'Package not found', code: 'not_found' });
     }
 
     const packageData = pkgData.package_data;
     const answerSheet = packageData.answer_sheet || [];
+    const meta = packageData.meta || {};
 
     const answerKey = {};
     for (const a of answerSheet) {
@@ -61,10 +62,14 @@ router.post('/', authenticateToken, async (req, res) => {
       session_id,
       user_id,
       package_id,
-      standard: packageData.meta?.standard,
-      term: packageData.meta?.term || null,
-      subject: packageData.meta?.subject,
-      difficulty: packageData.meta?.difficulty,
+      curriculum: meta.curriculum || 'tt_primary',
+      level: meta.level,
+      period: meta.period || null,
+      subject: meta.subject,
+      difficulty: meta.difficulty || null,
+      trial_type: meta.trial_type || 'practice',
+      topic: meta.topic || null,
+      source,
       state: 'completed',
       score,
       percentage,
@@ -76,15 +81,22 @@ router.post('/', authenticateToken, async (req, res) => {
     const resultRows = scoredAnswers.map(a => ({
       session_id,
       user_id,
-      question_id: a.question_id,
-      topic: a.topic || 'General',
+      curriculum: meta.curriculum || 'tt_primary',
+      level: meta.level,
+      period: meta.period || null,
+      subject: meta.subject,
+      difficulty: meta.difficulty || null,
+      trial_type: meta.trial_type || 'practice',
+      topic: a.topic || meta.topic || null,
       subtopic: a.subtopic || '',
       cognitive_level: a.cognitive_level || 'knowledge',
       difficulty_weight: a.difficulty_weight || 1,
+      question_id: a.question_id,
       selected_answer: a.selected_answer,
       correct_answer: a.correct_answer,
       is_correct: a.is_correct,
-      time_taken: a.time_taken_seconds || null
+      time_taken: a.time_taken_seconds || null,
+      source
     }));
 
     await getSupabase().from('exam_results').insert(resultRows);
@@ -105,8 +117,8 @@ router.post('/', authenticateToken, async (req, res) => {
     });
 
   } catch (err) {
-    console.error('Submit exam error:', err);
-    return res.status(500).json({ error: 'Failed to submit exam', details: err.message });
+    console.error('[submit-exam] Error:', err);
+    return res.status(500).json({ error: 'Failed to submit exam', code: 'server_error', details: err.message });
   }
 });
 

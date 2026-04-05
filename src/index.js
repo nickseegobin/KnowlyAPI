@@ -21,6 +21,7 @@ const overallInsightRouter = require('./routes/overallInsight');
 const editorReadRouter = require('./routes/editorRead');
 const editorSaveRouter = require('./routes//editorSave');
 const leaderboardRouter = require('./routes/leaderboard');
+const cronRouter = require('./routes/cron');
 
 
 
@@ -38,6 +39,7 @@ app.use('/api/v1/overall-insight', overallInsightRouter);
 app.use('/api/v1/editor-read', editorReadRouter);
 app.use('/api/v1/editor-save', editorSaveRouter);
 app.use('/api/v1/leaderboard', leaderboardRouter);
+app.use('/api/v1/cron', cronRouter);
 
 
 // 404 handler
@@ -47,5 +49,5 @@ app.use((req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`NoeyAI API running on port ${PORT}`);
+  console.log(`Knowly API running on port ${PORT}`);
 });

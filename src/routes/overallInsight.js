@@ -8,21 +8,24 @@ router.post('/:user_id', authenticateToken, async (req, res) => {
   const { student, period, overall, subjects } = req.body;
 
   if (!student || !period || !overall || !subjects) {
-    return res.status(400).json({ error: 'Missing required fields' });
+    return res.status(400).json({ error: 'Missing required fields', code: 'missing_fields' });
   }
 
   try {
+    const levelLabel = student.level === 'std_4' ? 'Standard 4' : student.level === 'std_5' ? 'Standard 5 SEA Prep' : (student.level || 'Primary');
+    const periodLabel = student.period ? `, ${student.period.replace('_', ' ')}` : '';
+
     const subjectSummaries = subjects.map(s => {
       const topicLines = s.topics.map(t =>
         `    - ${t.topic}: ${t.correct}/${t.total} (${t.pct}%)`
       ).join('\n');
-      return `  ${s.subject} — ${s.exams} exam(s), average ${s.average_pct}%:\n${topicLines}`;
+      return `  ${s.subject} — ${s.exams} trial(s), average ${s.average_pct}%:\n${topicLines}`;
     }).join('\n\n');
 
     const prompt = `You are a warm, encouraging Caribbean primary school tutor giving feedback to a student and their family.
 
-Student: ${student.standard === 'std_4' ? 'Standard 4' : 'Standard 5 SEA Prep'}, ${student.term || 'SEA prep'}
-Period: ${period.week} — ${period.exams_completed} exam(s) completed, ${Math.round(period.total_time_seconds / 60)} minutes total study time
+Student: ${levelLabel}${periodLabel}
+Period: ${period.week} — ${period.exams_completed} trial(s) completed, ${Math.round(period.total_time_seconds / 60)} minutes total study time
 Overall average: ${overall.average_score_pct}% — trend: ${overall.trend}
 
 Subject breakdown:
@@ -45,8 +48,8 @@ Use simple language suitable for a primary school student and their parent. Be s
     });
 
   } catch (err) {
-    console.error('Overall insight error:', err);
-    return res.status(500).json({ error: 'Failed to generate insight', details: err.message });
+    console.error('[overall-insight] Error:', err);
+    return res.status(500).json({ error: 'Failed to generate insight', code: 'server_error', details: err.message });
   }
 });
 

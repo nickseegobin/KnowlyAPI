@@ -18,10 +18,10 @@ router.get('/:user_id', authenticateToken, async (req, res) => {
 
     if (!sessions || sessions.length === 0) {
       return res.json({
-        total_exams_completed: 0,
+        total_trials_completed: 0,
         average_score_percentage: 0,
-        exams_by_subject: {},
-        recent_exams: []
+        trials_by_subject: {},
+        recent_trials: []
       });
     }
 
@@ -34,33 +34,39 @@ router.get('/:user_id', authenticateToken, async (req, res) => {
       bySubject[s.subject].count++;
       bySubject[s.subject].total += s.percentage || 0;
     }
-    const exams_by_subject = {};
+    const trials_by_subject = {};
     for (const [subject, data] of Object.entries(bySubject)) {
-      exams_by_subject[subject] = {
+      trials_by_subject[subject] = {
         count: data.count,
         average: Math.round(data.total / data.count)
       };
     }
 
-    const recent_exams = sessions.slice(0, 10).map(s => ({
+    const recent_trials = sessions.slice(0, 10).map(s => ({
       session_id: s.session_id,
       package_id: s.package_id,
+      curriculum: s.curriculum || 'tt_primary',
+      level: s.level,
+      period: s.period || null,
       subject: s.subject,
-      difficulty: s.difficulty,
+      difficulty: s.difficulty || null,
+      trial_type: s.trial_type || 'practice',
+      topic: s.topic || null,
+      source: s.source || 'direct',
       score: s.percentage,
       completed_at: s.completed_at
     }));
 
     return res.json({
-      total_exams_completed: total,
+      total_trials_completed: total,
       average_score_percentage: avgScore,
-      exams_by_subject,
-      recent_exams
+      trials_by_subject,
+      recent_trials
     });
 
   } catch (err) {
-    console.error('Progress error:', err);
-    return res.status(500).json({ error: 'Failed to fetch progress', details: err.message });
+    console.error('[progress] Error:', err);
+    return res.status(500).json({ error: 'Failed to fetch progress', code: 'server_error', details: err.message });
   }
 });
 

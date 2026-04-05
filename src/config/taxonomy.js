@@ -1,5 +1,5 @@
 // ============================================================
-// NoeyAI — Topic Taxonomy
+// Knowly — Topic Taxonomy
 // Source: T&T Ministry of Education Primary Curriculum Guides
 //         Standard 4 and Standard 5
 // ============================================================
@@ -656,18 +656,191 @@ const TAXONOMY = {
   }
 };
 
-// Question count and time limits per difficulty
+// ============================================================
+// Block 0: Updated EXAM_CONFIG per Section 5.2
+// Standard levels: Easy 10/90s, Medium 15/90s, Hard 20/90s
+// Capstone (std_5): SEA papers Math 40/90s, ELA 36/90s
+// ============================================================
+
 const EXAM_CONFIG = {
-  std_4: {
-    easy:   { question_count: 20, time_per_question_seconds: 120, total_time_seconds: 2400 },
-    medium: { question_count: 25, time_per_question_seconds: 90,  total_time_seconds: 3000 },  // ~50 mins
-    hard:   { question_count: 30, time_per_question_seconds: 72,  total_time_seconds: 3600 }   // 60 mins
-  },
-  std_5: {
-    easy:   { question_count: 25, time_per_question_seconds: 108, total_time_seconds: 4500 },
-    medium: { question_count: 40, time_per_question_seconds: 90,  total_time_seconds: 6000 },  // SEA is 40 questions
-    hard:   { question_count: 45, time_per_question_seconds: 80,  total_time_seconds: 7200 }
+  tt_primary: {
+    practice: {
+      easy:   { question_count: 10, time_per_question_seconds: 90, total_time_seconds: 900 },   // 15 min
+      medium: { question_count: 15, time_per_question_seconds: 90, total_time_seconds: 1350 },  // ~22 min
+      hard:   { question_count: 20, time_per_question_seconds: 90, total_time_seconds: 1800 }  // 30 min
+    },
+    sea_paper: {
+      math:    { question_count: 40, time_per_question_seconds: 90, total_time_seconds: 3600 },  // 60 min
+      english: { question_count: 36, time_per_question_seconds: 90, total_time_seconds: 3240 } // 54 min
+    }
   }
 };
 
-module.exports = { TAXONOMY, EXAM_CONFIG };
+// ============================================================
+// Block 0: Curriculum Configuration (Section 7.3)
+// Supports T&T Primary (current), Caribbean CXC, North American
+// ============================================================
+
+const CURRICULUM_CONFIG = {
+  tt_primary: {
+    curriculum_id: "tt_primary",
+    display_name: "T&T Primary (SEA)",
+    level_label: "Standard",
+    period_label: "Term",
+    levels: [
+      { id: "std_4", label: "Standard 4", has_periods: true, is_capstone: false },
+      { id: "std_5", label: "Standard 5", has_periods: false, is_capstone: true }
+    ],
+    periods: ["term_1", "term_2", "term_3"],
+    subjects: ["math", "english", "science", "social_studies"],
+    capstone_subjects: {
+      math: {
+        topics: [
+          "Number Theory",
+          "Fractions",
+          "Decimals",
+          "Percentages",
+          "Measurement",
+          "Geometry",
+          "Statistics",
+          "Algebra"
+        ],
+        full_paper_question_count: 40,
+        topic_weightings: {
+          "Number Theory": 5,
+          "Fractions": 6,
+          "Decimals": 5,
+          "Percentages": 5,
+          "Measurement": 6,
+          "Geometry": 6,
+          "Statistics": 4,
+          "Algebra": 3
+        }
+      },
+      english: {
+        topics: [
+          "Comprehension",
+          "Grammar",
+          "Vocabulary",
+          "Punctuation",
+          "Writing Mechanics"
+        ],
+        full_paper_question_count: 36,
+        topic_weightings: {
+          "Comprehension": 10,
+          "Grammar": 8,
+          "Vocabulary": 8,
+          "Punctuation": 5,
+          "Writing Mechanics": 5
+        }
+      },
+      // Science and Social Studies don't have standalone full papers in SEA
+      science: {
+        topics: [
+          "Living Things",
+          "Matter",
+          "Energy",
+          "Forces",
+          "Earth and Environment"
+        ],
+        full_paper_question_count: null  // No sea_paper for Science
+      },
+      social_studies: {
+        topics: [
+          "History",
+          "Geography",
+          "Civics",
+          "Economics"
+        ],
+        full_paper_question_count: null  // No sea_paper for Social Studies
+      }
+    }
+  },
+
+  // Future curricula - structure reference only
+  caribbean_cxc: {
+    curriculum_id: "caribbean_cxc",
+    display_name: "Caribbean CXC (CSEC)",
+    level_label: "Form",
+    period_label: null,
+    levels: [
+      { id: "form_4", label: "Form 4", has_periods: false, is_capstone: false },
+      { id: "form_5", label: "Form 5", has_periods: false, is_capstone: true }
+    ],
+    periods: [],
+    subjects: ["mathematics", "english_a", "biology", "history"]
+  },
+
+  north_american: {
+    curriculum_id: "north_american",
+    display_name: "North American (Grades)",
+    level_label: "Grade",
+    period_label: "Semester",
+    levels: [
+      { id: "grade_10", label: "Grade 10", has_periods: true, is_capstone: false },
+      { id: "grade_12", label: "Grade 12", has_periods: false, is_capstone: true }
+    ],
+    periods: ["semester_1", "semester_2"],
+    subjects: ["math", "english", "science", "social_studies"]
+  }
+};
+
+// ============================================================
+// Helper Functions
+// ============================================================
+
+function getExamConfig(curriculum, type, difficultyOrSubject) {
+  const config = EXAM_CONFIG[curriculum];
+  if (!config) return null;
+
+  if (type === 'practice') {
+    return config.practice[difficultyOrSubject];
+  } else if (type === 'sea_paper') {
+    return config.sea_paper[difficultyOrSubject];
+  }
+  return null;
+}
+
+function getCurriculumConfig(curriculumId) {
+  return CURRICULUM_CONFIG[curriculumId] || null;
+}
+
+function isCapstoneLevel(curriculumId, levelId) {
+  const config = CURRICULUM_CONFIG[curriculumId];
+  if (!config) return false;
+  const level = config.levels.find(l => l.id === levelId);
+  return level ? level.is_capstone : false;
+}
+
+function getLevelConfig(curriculumId, levelId) {
+  const config = CURRICULUM_CONFIG[curriculumId];
+  if (!config) return null;
+  return config.levels.find(l => l.id === levelId) || null;
+}
+
+function getCapstoneSubjectConfig(curriculumId, subject) {
+  const config = CURRICULUM_CONFIG[curriculumId];
+  if (!config || !config.capstone_subjects) return null;
+  return config.capstone_subjects[subject] || null;
+}
+
+function supportsSeaPaper(curriculumId, subject) {
+  const subjectConfig = getCapstoneSubjectConfig(curriculumId, subject);
+  return subjectConfig && subjectConfig.full_paper_question_count !== null;
+}
+
+// ============================================================
+// Legacy Exports (for backward compatibility during transition)
+// ============================================================
+
+module.exports = {
+  TAXONOMY,
+  EXAM_CONFIG,
+  CURRICULUM_CONFIG,
+  getExamConfig,
+  getCurriculumConfig,
+  isCapstoneLevel,
+  getLevelConfig,
+  getCapstoneSubjectConfig,
+  supportsSeaPaper
+};
