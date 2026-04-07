@@ -236,6 +236,36 @@ router.post('/complete', authenticateToken, async (req, res) => {
   return res.json({ completed: true, badge_awarded, quest_id: session.quest_id });
 });
 
+// ── DELETE /api/v1/quest/sessions/reset ──────────────────────────────────────
+// Server-key only. Wipes all quest_sessions for a user. Test use only.
+// Body: { user_id }
+router.delete('/sessions/reset', async (req, res) => {
+  const serverKey = req.headers['x-aep-server-key'];
+  if (!serverKey || serverKey !== process.env.AEP_SERVER_KEY) {
+    return res.status(401).json({ error: 'Server key required', code: 'unauthorized' });
+  }
+
+  const { user_id } = req.body;
+  if (!user_id) {
+    return res.status(400).json({ error: 'user_id is required', code: 'missing_fields' });
+  }
+
+  try {
+    const { error } = await getSupabase()
+      .from('quest_sessions')
+      .delete()
+      .eq('user_id', String(user_id));
+
+    if (error) throw error;
+
+    console.log(`[quest/sessions/reset] Wiped quest sessions for user ${user_id}`);
+    return res.json({ user_id, status: 'reset' });
+  } catch (err) {
+    console.error('[quest/sessions/reset] Error:', err);
+    return res.status(500).json({ error: 'Failed to reset sessions', code: 'server_error', details: err.message });
+  }
+});
+
 // ── POST /api/v1/quest/generate ───────────────────────────────────────────────
 // Server-key only. Generates and stores a Quest — used for seeding and editor.
 // Standard generation (from buffer/auto): status defaults to 'approved'.
