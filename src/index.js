@@ -22,6 +22,7 @@ const editorReadRouter = require('./routes/editorRead');
 const editorSaveRouter = require('./routes/editorSave');
 const leaderboardRouter = require('./routes/leaderboard');
 const cronRouter = require('./routes/cron');
+const questRouter = require('./routes/quest');
 
 
 
@@ -40,6 +41,7 @@ app.use('/api/v1/editor-read', editorReadRouter);
 app.use('/api/v1/editor-save', editorSaveRouter);
 app.use('/api/v1/leaderboard', leaderboardRouter);
 app.use('/api/v1/cron', cronRouter);
+app.use('/api/v1/quest', questRouter);
 
 
 // 404 handler
