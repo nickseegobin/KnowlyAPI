@@ -19,7 +19,7 @@ const catalogueRouter = require('./routes/catalogue');
 const poolRouter = require('./routes/pool');
 const overallInsightRouter = require('./routes/overallInsight');
 const editorReadRouter = require('./routes/editorRead');
-const editorSaveRouter = require('./routes//editorSave');
+const editorSaveRouter = require('./routes/editorSave');
 const leaderboardRouter = require('./routes/leaderboard');
 const cronRouter = require('./routes/cron');
 
