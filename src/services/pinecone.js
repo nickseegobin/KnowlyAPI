@@ -13,10 +13,10 @@ function getIndex() {
   return getPinecone().index(process.env.PINECONE_INDEX);
 }
 
-async function queryIndex({ standard, term, subject, topK = 10 }) {
+async function queryIndex({ level, period, subject, topK = 10 }) {
   const index = getIndex();
-  const filter = { standard, subject };
-  if (term) filter.term = term;
+  const filter = { level, subject };
+  if (period) filter.period = period;
   return { index, filter };
 }
 
