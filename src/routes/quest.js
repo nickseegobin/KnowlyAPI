@@ -397,9 +397,8 @@ router.post('/save', async (req, res) => {
 
   const update = {
     content,
-    status:     'draft',
+    status:      'draft',
     approved_at: null,
-    updated_at:  new Date().toISOString(),
   };
   if (objectives !== undefined) update.objectives = objectives;
 
