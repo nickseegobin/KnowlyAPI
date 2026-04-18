@@ -107,7 +107,7 @@ router.patch('/:package_id', requireServerKey, async (req, res) => {
   // Verify the package exists
   const { data: existing, error: fetchError } = await getSupabase()
     .from('exam_pool')
-    .select('package_id, meta')
+    .select('package_id')
     .eq('package_id', package_id)
     .single();
 
