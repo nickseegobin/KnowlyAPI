@@ -61,6 +61,57 @@ router.get('/:quest_id/completed', authenticateToken, async (req, res) => {
   return res.json({ completed: !!(data && data.length > 0) });
 });
 
+// ── GET /api/v1/quest/list ────────────────────────────────────────────────────
+// Server-key only. Paginated, filterable Quest list for the Editor — returns all
+// statuses (draft, approved, rejected). Students never hit this route.
+// Query params: curriculum, level, period, subject, status, page, per_page
+router.get('/list', async (req, res) => {
+  const serverKey = req.headers['x-aep-server-key'];
+  if (!serverKey || serverKey !== process.env.AEP_SERVER_KEY) {
+    return res.status(401).json({ error: 'Server key required', code: 'unauthorized' });
+  }
+
+  const {
+    curriculum = 'tt_primary',
+    level,
+    period,
+    subject,
+    status,
+    page     = 1,
+    per_page = 25,
+  } = req.query;
+
+  const offset = (parseInt(page, 10) - 1) * parseInt(per_page, 10);
+
+  let query = getSupabase()
+    .from('quests')
+    .select('quest_id, curriculum, level, period, subject, topic, module_number, module_title, status, generated_at, approved_at', { count: 'exact' })
+    .eq('curriculum', curriculum)
+    .order('generated_at', { ascending: false })
+    .range(offset, offset + parseInt(per_page, 10) - 1);
+
+  if (level)   query = query.eq('level', level);
+  if (subject) query = query.eq('subject', subject);
+  if (status)  query = query.eq('status', status);
+
+  if (period !== undefined) {
+    query = period ? query.eq('period', period) : query.is('period', null);
+  }
+
+  const { data, error, count } = await query;
+  if (error) {
+    console.error('[quest/list] Supabase error:', error);
+    return res.status(500).json({ error: 'Failed to fetch quest list', code: 'server_error' });
+  }
+
+  return res.json({
+    quests:   data || [],
+    total:    count || 0,
+    page:     parseInt(page, 10),
+    per_page: parseInt(per_page, 10),
+  });
+});
+
 // ── GET /api/v1/quest/:quest_id ───────────────────────────────────────────────
 // Returns full Quest content for an approved Quest.
 router.get('/:quest_id', authenticateToken, async (req, res) => {
@@ -302,6 +353,158 @@ router.post('/generate', async (req, res) => {
     console.error('[quest/generate] Error:', err);
     return res.status(500).json({ error: 'Quest generation failed', code: 'generation_error', details: err.message });
   }
+});
+
+// ── GET /api/v1/quest/editor/:quest_id ────────────────────────────────────────
+// Server-key only. Returns full Quest content regardless of status (draft, approved, etc.)
+// Used by the Editor to load a Quest for viewing or editing.
+router.get('/editor/:quest_id', async (req, res) => {
+  const serverKey = req.headers['x-aep-server-key'];
+  if (!serverKey || serverKey !== process.env.AEP_SERVER_KEY) {
+    return res.status(401).json({ error: 'Server key required', code: 'unauthorized' });
+  }
+
+  const { quest_id } = req.params;
+
+  const { data, error } = await getSupabase()
+    .from('quests')
+    .select('*')
+    .eq('quest_id', quest_id)
+    .single();
+
+  if (error || !data) {
+    return res.status(404).json({ error: 'Quest not found', code: 'not_found' });
+  }
+
+  return res.json(data);
+});
+
+// ── POST /api/v1/quest/save ───────────────────────────────────────────────────
+// Server-key only. Saves edited Quest content back to Supabase.
+// Resets status to 'draft' on any content edit — requires re-approval.
+// Body: { quest_id, content, objectives? }
+router.post('/save', async (req, res) => {
+  const serverKey = req.headers['x-aep-server-key'];
+  if (!serverKey || serverKey !== process.env.AEP_SERVER_KEY) {
+    return res.status(401).json({ error: 'Server key required', code: 'unauthorized' });
+  }
+
+  const { quest_id, content, objectives } = req.body;
+
+  if (!quest_id || !content) {
+    return res.status(400).json({ error: 'quest_id and content are required', code: 'missing_fields' });
+  }
+
+  const update = {
+    content,
+    status:     'draft',
+    approved_at: null,
+    updated_at:  new Date().toISOString(),
+  };
+  if (objectives !== undefined) update.objectives = objectives;
+
+  const { data, error } = await getSupabase()
+    .from('quests')
+    .update(update)
+    .eq('quest_id', quest_id)
+    .select('quest_id, status')
+    .single();
+
+  if (error) {
+    console.error('[quest/save] Supabase error:', error);
+    return res.status(500).json({ error: 'Failed to save quest', code: 'server_error' });
+  }
+
+  if (!data) {
+    return res.status(404).json({ error: 'Quest not found', code: 'not_found' });
+  }
+
+  console.log(`[quest/save] Saved ${quest_id} → status: draft`);
+  return res.json({ quest_id: data.quest_id, status: data.status, saved_at: update.updated_at });
+});
+
+// ── PATCH /api/v1/quest/status ────────────────────────────────────────────────
+// Server-key only. Updates Quest status — approved or rejected.
+// Body: { quest_id, status }   status must be 'approved' | 'rejected' | 'draft'
+router.patch('/status', async (req, res) => {
+  const serverKey = req.headers['x-aep-server-key'];
+  if (!serverKey || serverKey !== process.env.AEP_SERVER_KEY) {
+    return res.status(401).json({ error: 'Server key required', code: 'unauthorized' });
+  }
+
+  const { quest_id, status } = req.body;
+
+  if (!quest_id || !status) {
+    return res.status(400).json({ error: 'quest_id and status are required', code: 'missing_fields' });
+  }
+
+  const allowed = ['approved', 'rejected', 'draft'];
+  if (!allowed.includes(status)) {
+    return res.status(400).json({ error: `status must be one of: ${allowed.join(', ')}`, code: 'invalid_status' });
+  }
+
+  const update = { status };
+  if (status === 'approved') update.approved_at = new Date().toISOString();
+  if (status !== 'approved') update.approved_at = null;
+
+  const { data, error } = await getSupabase()
+    .from('quests')
+    .update(update)
+    .eq('quest_id', quest_id)
+    .select('quest_id, status, approved_at')
+    .single();
+
+  if (error) {
+    console.error('[quest/status] Supabase error:', error);
+    return res.status(500).json({ error: 'Failed to update quest status', code: 'server_error' });
+  }
+
+  if (!data) {
+    return res.status(404).json({ error: 'Quest not found', code: 'not_found' });
+  }
+
+  console.log(`[quest/status] ${quest_id} → ${status}`);
+  return res.json({ quest_id: data.quest_id, status: data.status, approved_at: data.approved_at });
+});
+
+// ── DELETE /api/v1/quest/editor/:quest_id ─────────────────────────────────────
+// Server-key only. Deletes a Quest — only allowed when status is 'draft' or 'rejected'.
+// Approved Quests cannot be deleted via the Editor.
+router.delete('/editor/:quest_id', async (req, res) => {
+  const serverKey = req.headers['x-aep-server-key'];
+  if (!serverKey || serverKey !== process.env.AEP_SERVER_KEY) {
+    return res.status(401).json({ error: 'Server key required', code: 'unauthorized' });
+  }
+
+  const { quest_id } = req.params;
+
+  // Fetch first to check status
+  const { data: existing, error: fetchError } = await getSupabase()
+    .from('quests')
+    .select('quest_id, status')
+    .eq('quest_id', quest_id)
+    .single();
+
+  if (fetchError || !existing) {
+    return res.status(404).json({ error: 'Quest not found', code: 'not_found' });
+  }
+
+  if (existing.status === 'approved') {
+    return res.status(403).json({ error: 'Approved Quests cannot be deleted', code: 'forbidden' });
+  }
+
+  const { error: deleteError } = await getSupabase()
+    .from('quests')
+    .delete()
+    .eq('quest_id', quest_id);
+
+  if (deleteError) {
+    console.error('[quest/delete] Supabase error:', deleteError);
+    return res.status(500).json({ error: 'Failed to delete quest', code: 'server_error' });
+  }
+
+  console.log(`[quest/delete] Deleted ${quest_id}`);
+  return res.json({ quest_id, deleted: true });
 });
 
 module.exports = router;
