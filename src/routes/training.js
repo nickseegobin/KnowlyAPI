@@ -49,6 +49,73 @@ router.post('/upsert', requireServerKey, async (req, res) => {
   }
 });
 
+// ── GET /api/v1/training/list ─────────────────────────────────────────────────
+// Lists all training vectors stored in Pinecone for a given curriculum.
+// Uses list() to page through all vector IDs (by prefix), then fetch() in batches
+// to retrieve metadata (including the original content_text stored as 'text').
+//
+// Query params:
+//   curriculum (default: tt_primary)
+//   level, period, subject — optional metadata filters applied client-side after fetch
+//
+// This is the source of truth — use it to re-sync the WP local mirror table.
+router.get('/list', requireServerKey, async (req, res) => {
+  const { curriculum = 'tt_primary', level, period, subject } = req.query;
+
+  try {
+    const index = getIndex();
+
+    // Page through all vector IDs matching our curriculum prefix
+    const allIds = [];
+    let paginationToken;
+
+    do {
+      const listResult = await index.listPaginated({
+        prefix:          `tm-${curriculum}`,
+        limit:           100,
+        paginationToken,
+      });
+      (listResult.vectors || []).forEach(v => allIds.push(v.id));
+      paginationToken = listResult.pagination?.next;
+    } while (paginationToken);
+
+    if (!allIds.length) {
+      return res.json({ items: [], total: 0 });
+    }
+
+    // Fetch metadata in batches of 100 (Pinecone per-request limit)
+    const items = [];
+    for (let i = 0; i < allIds.length; i += 100) {
+      const batch    = allIds.slice(i, i + 100);
+      const fetched  = await index.fetch(batch);
+      for (const [id, vec] of Object.entries(fetched.records || {})) {
+        const meta = vec.metadata || {};
+        // Apply optional filters
+        if (level   && meta.level   !== level)   continue;
+        if (period  && meta.period  !== period)  continue;
+        if (subject && meta.subject !== subject) continue;
+        items.push({
+          vector_id:    id,
+          curriculum:   meta.curriculum || curriculum,
+          level:        meta.level      || '',
+          period:       meta.period     || null,
+          subject:      meta.subject    || '',
+          topic:        meta.topic      || '',
+          subtopic:     meta.subtopic   || null,
+          content_text: meta.text       || '',
+        });
+      }
+    }
+
+    console.log(`[training/list] Found ${items.length} vectors for ${curriculum}`);
+    return res.json({ items, total: items.length });
+
+  } catch (err) {
+    console.error('[training/list] Error:', err);
+    return res.status(500).json({ error: 'Failed to list training material', code: 'server_error', details: err.message });
+  }
+});
+
 // ── DELETE /api/v1/training/delete ───────────────────────────────────────────
 // Delete a single vector from Pinecone.
 // Body: { vector_id }
