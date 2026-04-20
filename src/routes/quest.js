@@ -361,15 +361,16 @@ router.post('/import', async (req, res) => {
       topic:         topic         || null,
       module_number: module_number ? parseInt(module_number, 10) : null,
       module_title:  module_title  || null,
-      content,
       objectives:    null,
+      content,
       status:        'draft',
+      approved_at:   null,
       generated_at:  new Date().toISOString(),
     });
 
   if (error) {
     console.error('[quest/import] Supabase error:', error);
-    return res.status(500).json({ error: 'Failed to import quest', code: 'server_error', details: error.message });
+    return res.status(500).json({ error: error.message, code: 'server_error' });
   }
 
   console.log(`[quest/import] Imported ${questId} (${curriculum}/${level}/${subject})`);
