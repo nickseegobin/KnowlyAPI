@@ -317,6 +317,65 @@ router.delete('/sessions/reset', async (req, res) => {
   }
 });
 
+// ── POST /api/v1/quest/import ─────────────────────────────────────────────────
+// Server-key only. Imports manually-authored Quest content directly into Supabase.
+// No AI generation — content is provided as-is and stored as 'draft'.
+// Body: { curriculum, level, period, subject, topic, module_number, module_title, content }
+//   content must be { sections: [...] }
+router.post('/import', async (req, res) => {
+  const serverKey = req.headers['x-aep-server-key'];
+  if (!serverKey || serverKey !== process.env.AEP_SERVER_KEY) {
+    return res.status(401).json({ error: 'Server key required', code: 'unauthorized' });
+  }
+
+  const {
+    curriculum    = 'tt_primary',
+    level,
+    period        = null,
+    subject,
+    topic         = null,
+    module_number = null,
+    module_title  = null,
+    content,
+  } = req.body;
+
+  if (!level || !subject || !content) {
+    return res.status(400).json({ error: 'level, subject, and content are required', code: 'missing_fields' });
+  }
+
+  if (!Array.isArray(content.sections) || content.sections.length === 0) {
+    return res.status(400).json({ error: 'content must have a non-empty sections array', code: 'invalid_format' });
+  }
+
+  const slug    = subject.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-');
+  const questId = `q-${level}-${slug}-${crypto.randomBytes(4).toString('hex')}`;
+
+  const { error } = await getSupabase()
+    .from('quests')
+    .insert({
+      quest_id:      questId,
+      curriculum,
+      level,
+      period:        period        || null,
+      subject,
+      topic:         topic         || null,
+      module_number: module_number ? parseInt(module_number, 10) : null,
+      module_title:  module_title  || null,
+      content,
+      objectives:    null,
+      status:        'draft',
+      generated_at:  new Date().toISOString(),
+    });
+
+  if (error) {
+    console.error('[quest/import] Supabase error:', error);
+    return res.status(500).json({ error: 'Failed to import quest', code: 'server_error', details: error.message });
+  }
+
+  console.log(`[quest/import] Imported ${questId} (${curriculum}/${level}/${subject})`);
+  return res.json({ quest_id: questId, status: 'draft' });
+});
+
 // ── POST /api/v1/quest/generate ───────────────────────────────────────────────
 // Server-key only. Generates and stores a Quest — used for seeding and editor.
 // Standard generation (from buffer/auto): status defaults to 'approved'.
