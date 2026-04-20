@@ -361,7 +361,7 @@ router.post('/import', async (req, res) => {
       topic:         topic         || null,
       module_number: module_number ? parseInt(module_number, 10) : null,
       module_title:  module_title  || null,
-      objectives:    null,
+      objectives:    [],
       content,
       status:        'draft',
       approved_at:   null,
