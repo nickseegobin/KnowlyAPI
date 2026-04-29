@@ -194,7 +194,7 @@ RULES:
 2. Each section must have:
    - A clear title
    - Plain language explanation (2-4 paragraphs, use Caribbean context and examples)
-   - 1-2 worked examples with problem, step-by-step solution, and Caribbean context
+   - 1-2 worked examples with problem, step-by-step solution, and Caribbean context. solution MUST be an array of plain strings (e.g. ["Step 1: ...", "Step 2: ..."])
    - 3-5 knowledge check questions (unscored — MCQ only, 4 options A/B/C/D)
 3. Language must be appropriate for a primary school student
 4. Use Caribbean names, places, and contexts throughout
