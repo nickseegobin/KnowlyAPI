@@ -163,6 +163,7 @@ async function generateQuestContent({
   questData.module_number = module_number;
   questData.module_title  = module_title;
   questData.objectives    = objectives;
+  if (subtopic)            questData.topic      = subtopic;   // Path C: topic = the single learning objective
   if (sort_order !== null) questData.sort_order = sort_order;
 
   return { questId, questData, sortOrder: sort_order };
