@@ -16,7 +16,7 @@ router.get('/catalogue', authenticateToken, async (req, res) => {
 
   let query = getSupabase()
     .from('quests')
-    .select('quest_id, curriculum, level, period, subject, topic, module_number, module_title, generated_at')
+    .select('quest_id, curriculum, level, period, subject, topic, module_number, module_title, sort_order, generated_at')
     .eq('curriculum', curriculum)
     .eq('level', level)
     .eq('status', 'approved')
