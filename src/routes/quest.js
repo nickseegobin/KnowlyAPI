@@ -20,6 +20,7 @@ router.get('/catalogue', authenticateToken, async (req, res) => {
     .eq('curriculum', curriculum)
     .eq('level', level)
     .eq('status', 'approved')
+    .order('sort_order',    { ascending: true, nullsFirst: false })
     .order('module_number', { ascending: true, nullsFirst: false });
 
   if (subject) query = query.eq('subject', subject);
@@ -388,13 +389,14 @@ router.post('/generate', async (req, res) => {
   }
 
   const {
-    curriculum   = 'tt_primary',
+    curriculum     = 'tt_primary',
     level,
-    period       = null,
+    period         = null,
     subject,
-    topic        = null,
-    module_index = null,   // 0-based index into taxonomy modules array
-    status       = 'approved',
+    topic          = null,
+    module_index   = null,    // 0-based module index (Path A / Path C)
+    subtopic_index = null,    // 0-based subtopic index within module (Path C only)
+    status         = 'approved',
   } = req.body;
 
   if (!level || !subject) {
@@ -402,11 +404,12 @@ router.post('/generate', async (req, res) => {
   }
 
   try {
-    const { questId, questData } = await generateQuestContent({
+    const { questId, questData, sortOrder } = await generateQuestContent({
       curriculum, level, period, subject, topic,
-      moduleIndex: module_index !== null ? parseInt(module_index, 10) : null,
+      moduleIndex:   module_index   !== null ? parseInt(module_index,   10) : null,
+      subtopicIndex: subtopic_index !== null ? parseInt(subtopic_index, 10) : null,
     });
-    const stored = await storeQuest({ questId, questData, status });
+    const stored = await storeQuest({ questId, questData, status, sortOrder });
     console.log(`[quest/generate] Generated ${questId} (status: ${stored.status})`);
     return res.json({ quest_id: questId, status: stored.status });
   } catch (err) {

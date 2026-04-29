@@ -818,6 +818,24 @@ function getLevelConfig(curriculumId, levelId) {
   return config.levels.find(l => l.id === levelId) || null;
 }
 
+function getSubtopicData(curriculum, level, subject, period, moduleIndex, subtopicIndex) {
+  if (curriculum !== 'tt_primary') throw new Error(`Unsupported curriculum: ${curriculum}`);
+  const subjectKey = subject.replace(/-/g, '_');
+  const modules = TAXONOMY[level]?.[subjectKey]?.[period];
+  if (!modules) throw new Error(`No taxonomy for ${level}/${subject}/${period}`);
+  const mod = modules[moduleIndex];
+  if (!mod) throw new Error(`No module at index ${moduleIndex} for ${level}/${subject}/${period} (${modules.length} modules available)`);
+  if (subtopicIndex < 0 || subtopicIndex >= mod.subtopics.length) {
+    throw new Error(`No subtopic at index ${subtopicIndex} in module ${moduleIndex} (${mod.subtopics.length} subtopics available)`);
+  }
+  return {
+    module_number: moduleIndex + 1,
+    module_title:  mod.topic,
+    subtopic:      mod.subtopics[subtopicIndex],
+    sort_order:    (moduleIndex * 100) + subtopicIndex,
+  };
+}
+
 function getCapstoneSubjectConfig(curriculumId, subject) {
   const config = CURRICULUM_CONFIG[curriculumId];
   if (!config || !config.capstone_subjects) return null;
@@ -842,5 +860,6 @@ module.exports = {
   isCapstoneLevel,
   getLevelConfig,
   getCapstoneSubjectConfig,
-  supportsSeaPaper
+  supportsSeaPaper,
+  getSubtopicData,
 };

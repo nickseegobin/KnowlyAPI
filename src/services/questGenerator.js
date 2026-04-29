@@ -10,7 +10,7 @@
 const { getEmbedding } = require('./embeddings');
 const { getIndex } = require('./pinecone');
 const { generateContent } = require('./ai');
-const { TAXONOMY, isCapstoneLevel } = require('../config/taxonomy');
+const { TAXONOMY, isCapstoneLevel, getSubtopicData } = require('../config/taxonomy');
 const { PROMPTS } = require('../config/prompts');
 const getSupabase = require('../config/supabase');
 
@@ -56,7 +56,11 @@ function getTopicData(curriculum, level, subject, topic) {
 
 // ── Quest ID builder ──────────────────────────────────────────────────────────
 
-function buildQuestId(curriculum, level, period, subject, moduleNumber, topic) {
+function buildQuestId(curriculum, level, period, subject, moduleNumber, topic, subtopic) {
+  if (subtopic) {
+    const slug = subtopic.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+    return `quest-${curriculum}-${level}-${period}-${subject}-${slug}`;
+  }
   if (topic) {
     const slug = topic.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
     return `quest-${curriculum}-${level}-${subject}-${slug}`;
@@ -69,13 +73,19 @@ function buildQuestId(curriculum, level, period, subject, moduleNumber, topic) {
 /**
  * Generate Quest content via Claude.
  *
+ * Three generation paths:
+ *   Path A — module-scoped (legacy std_4): moduleIndex only
+ *   Path B — capstone topic-scoped (std_5): topic only
+ *   Path C — single subtopic (std_4 new): moduleIndex + subtopicIndex
+ *
  * @param {object} params
- * @param {string} params.curriculum   e.g. 'tt_primary'
- * @param {string} params.level        e.g. 'std_4' | 'std_5'
- * @param {string} [params.period]     e.g. 'term_1' — null for capstone
- * @param {string} params.subject      e.g. 'math'
- * @param {string} [params.topic]      Capstone topic name (Path B)
- * @param {number} [params.moduleIndex] 0-based index into taxonomy (Path A)
+ * @param {string} params.curriculum      e.g. 'tt_primary'
+ * @param {string} params.level           e.g. 'std_4' | 'std_5'
+ * @param {string} [params.period]        e.g. 'term_1' — null for capstone
+ * @param {string} params.subject         e.g. 'math'
+ * @param {string} [params.topic]         Capstone topic name (Path B)
+ * @param {number} [params.moduleIndex]   0-based module index (Path A / Path C)
+ * @param {number} [params.subtopicIndex] 0-based subtopic index within module (Path C)
  */
 async function generateQuestContent({
   curriculum = 'tt_primary',
@@ -84,19 +94,34 @@ async function generateQuestContent({
   subject,
   topic = null,
   moduleIndex = null,
+  subtopicIndex = null,
 }) {
   const now = new Date().toISOString();
   const isCapstone = isCapstoneLevel(curriculum, level);
 
-  let module_number = null;
-  let module_title  = null;
-  let objectives    = [];
+  let module_number  = null;
+  let module_title   = null;
+  let objectives     = [];
+  let sort_order     = null;
+  let subtopic       = null;
+  let singleObjective = false;
 
   if (isCapstone) {
+    // Path B — capstone topic-scoped (std_5)
     if (!topic) throw new Error('topic is required for capstone Quest generation');
     const data = getTopicData(curriculum, level, subject, topic);
     objectives = data.objectives;
+  } else if (subtopicIndex !== null && subtopicIndex !== undefined && moduleIndex !== null) {
+    // Path C — single subtopic per quest (std_4 new format)
+    const data = getSubtopicData(curriculum, level, subject, period, moduleIndex, subtopicIndex);
+    module_number   = data.module_number;
+    module_title    = data.module_title;
+    subtopic        = data.subtopic;
+    objectives      = [data.subtopic];
+    sort_order      = data.sort_order;
+    singleObjective = true;
   } else {
+    // Path A — module-scoped (std_4 legacy)
     if (moduleIndex === null || moduleIndex === undefined) {
       throw new Error('moduleIndex is required for period-scoped Quest generation');
     }
@@ -106,8 +131,8 @@ async function generateQuestContent({
     objectives    = data.objectives;
   }
 
-  const questId        = buildQuestId(curriculum, level, period, subject, module_number, topic);
-  const topicHint      = topic || module_title;
+  const questId        = buildQuestId(curriculum, level, period, subject, module_number, topic, subtopic);
+  const topicHint      = subtopic || topic || module_title;
   const curriculumChunks = await getCurriculumChunks(curriculum, level, subject, period, topicHint);
 
   const prompt = PROMPTS[curriculum].quest({
@@ -121,6 +146,7 @@ async function generateQuestContent({
     curriculumChunks,
     questId,
     now,
+    singleObjective,
   });
 
   const raw = await generateContent(prompt);
@@ -137,8 +163,9 @@ async function generateQuestContent({
   questData.module_number = module_number;
   questData.module_title  = module_title;
   questData.objectives    = objectives;
+  if (sort_order !== null) questData.sort_order = sort_order;
 
-  return { questId, questData };
+  return { questId, questData, sortOrder: sort_order };
 }
 
 // ── Storage ───────────────────────────────────────────────────────────────────
@@ -148,10 +175,11 @@ async function generateQuestContent({
  *
  * @param {object} params
  * @param {string} params.questId
- * @param {object} params.questData  Parsed Claude output with taxonomy fields merged
- * @param {string} params.status     'approved' (buffer/auto) | 'draft' (editor)
+ * @param {object} params.questData   Parsed Claude output with taxonomy fields merged
+ * @param {string} params.status      'approved' (buffer/auto) | 'draft' (editor)
+ * @param {number|null} params.sortOrder  Display order (Path C only)
  */
-async function storeQuest({ questId, questData, status = 'approved' }) {
+async function storeQuest({ questId, questData, status = 'approved', sortOrder = null }) {
   const now = new Date().toISOString();
 
   const { data, error } = await getSupabase()
@@ -167,6 +195,7 @@ async function storeQuest({ questId, questData, status = 'approved' }) {
       module_title:  questData.module_title  || null,
       objectives:    questData.objectives,
       content:       questData.content,
+      sort_order:    sortOrder !== null ? sortOrder : (questData.sort_order ?? null),
       status,
       generated_at:  questData.generated_at || now,
       approved_at:   status === 'approved' ? now : null,

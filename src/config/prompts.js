@@ -177,7 +177,7 @@ Return this exact structure:
 }`,
 
     // ── Quest Module ────────────────────────────────────────────────────────────
-    quest: ({ level, period, subject, topic, moduleNumber, moduleTitle, objectives, curriculumChunks, questId, now }) => `You are a T&T primary school curriculum writer. Generate a structured Quest learning module. Return ONLY valid JSON, no other text.
+    quest: ({ level, period, subject, topic, moduleNumber, moduleTitle, objectives, curriculumChunks, questId, now, singleObjective = false }) => `You are a T&T primary school curriculum writer. Generate a structured Quest learning module. Return ONLY valid JSON, no other text.
 
 PARAMETERS:
 - Level: ${level === 'std_4' ? 'Standard 4' : 'Standard 5 SEA Prep'}
@@ -190,7 +190,7 @@ LEARNING OBJECTIVES:
 ${objectives.map((o, i) => `${i + 1}. ${o}`).join('\n')}
 ${curriculumChunks ? `\nCURRICULUM NOTES:\n${curriculumChunks.slice(0, 1000)}\n` : ''}
 RULES:
-1. Generate 3-5 sections, each covering one or two learning objectives
+1. ${singleObjective ? 'Generate exactly ONE section for this single learning objective' : 'Generate 3-5 sections, each covering one or two learning objectives'}
 2. Each section must have:
    - A clear title
    - Plain language explanation (2-4 paragraphs, use Caribbean context and examples)
