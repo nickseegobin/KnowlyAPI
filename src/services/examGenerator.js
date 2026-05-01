@@ -322,8 +322,8 @@ async function storePackage({ packageData, fingerprints, status = 'approved', so
       correct_answer: questions?.find(q => q.question_id === f.question_id)?.correct_answer || ''
     }));
 
-    const { error: qbError } = await getSupabase().from('question_bank').insert(rows);
-    if (qbError) console.error('question_bank insert error:', qbError.message);
+    const { error: qbError } = await getSupabase().from('question_fingerprints').insert(rows);
+    if (qbError) console.error('question_fingerprints insert error:', qbError.message);
   }
 
   return sequenceIndex;

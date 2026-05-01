@@ -91,7 +91,7 @@ router.post('/', authenticateToken, async (req, res) => {
       }));
 
       const { error: qbError } = await getSupabase()
-        .from('question_bank')
+        .from('question_fingerprints')
         .insert(rows);
 
       if (qbError) throw qbError;

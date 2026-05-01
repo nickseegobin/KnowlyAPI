@@ -128,7 +128,7 @@ router.patch('/:package_id', requireServerKey, async (req, res) => {
     return res.status(500).json({ error: 'Failed to update package', code: 'server_error' });
   }
 
-  // Rebuild question_bank fingerprints if questions were provided
+  // Rebuild question_fingerprints if questions were provided
   if (Array.isArray(package_data.questions) && package_data.questions.length > 0) {
     const meta = package_data.meta || {};
     const rows = package_data.questions.map(q => ({
@@ -146,7 +146,7 @@ router.patch('/:package_id', requireServerKey, async (req, res) => {
 
     // Upsert on (package_id, question_id)
     await getSupabase()
-      .from('question_bank')
+      .from('question_fingerprints')
       .upsert(rows, { onConflict: 'package_id,question_id' });
   }
 
@@ -220,9 +220,9 @@ router.delete('/:package_id', requireServerKey, async (req, res) => {
     });
   }
 
-  // Delete question_bank rows first (no FK cascade assumed)
+  // Delete question_fingerprints rows first (no FK cascade assumed)
   await getSupabase()
-    .from('question_bank')
+    .from('question_fingerprints')
     .delete()
     .eq('package_id', package_id);
 
