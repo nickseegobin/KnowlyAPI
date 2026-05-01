@@ -25,7 +25,8 @@ const cronRouter = require('./routes/cron');
 const questRouter       = require('./routes/quest');
 const analyticsRouter   = require('./routes/analytics');
 const trainingRouter    = require('./routes/training');
-const trialEditorRouter = require('./routes/trialEditor');
+const trialEditorRouter        = require('./routes/trialEditor');
+const curriculumTopicsRouter   = require('./routes/curriculumTopics');
 
 
 
@@ -47,7 +48,8 @@ app.use('/api/v1/cron', cronRouter);
 app.use('/api/v1/quest',        questRouter);
 app.use('/api/v1/analytics',   analyticsRouter);
 app.use('/api/v1/training',    trainingRouter);
-app.use('/api/v1/trial-editor', trialEditorRouter);
+app.use('/api/v1/trial-editor',      trialEditorRouter);
+app.use('/api/v1/curriculum-topics', curriculumTopicsRouter);
 
 
 // 404 handler
