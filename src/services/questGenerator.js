@@ -10,7 +10,7 @@
 const { getEmbedding } = require('./embeddings');
 const { getIndex } = require('./pinecone');
 const { generateContent } = require('./ai');
-const { TAXONOMY, isCapstoneLevel, getSubtopicData } = require('../config/taxonomy');
+const curriculumDB = require('./curriculumDB');
 const { PROMPTS } = require('../config/prompts');
 const getSupabase = require('../config/supabase');
 
@@ -30,28 +30,6 @@ async function getCurriculumChunks(curriculum, level, subject, period, topicHint
     console.error('[questGenerator] Pinecone query failed, continuing without RAG:', err.message);
     return '';
   }
-}
-
-// ── Taxonomy helpers ──────────────────────────────────────────────────────────
-
-function getModuleData(curriculum, level, subject, period, moduleIndex) {
-  if (curriculum !== 'tt_primary') throw new Error(`Unsupported curriculum: ${curriculum}`);
-  const subjectKey = subject.replace(/-/g, '_');
-  const modules = TAXONOMY[level]?.[subjectKey]?.[period];
-  if (!modules) throw new Error(`No taxonomy for ${level}/${subject}/${period}`);
-  const mod = modules[moduleIndex];
-  if (!mod) throw new Error(`No module at index ${moduleIndex} for ${level}/${subject}/${period} (${modules.length} modules available)`);
-  return { module_number: moduleIndex + 1, module_title: mod.topic, objectives: mod.subtopics };
-}
-
-function getTopicData(curriculum, level, subject, topic) {
-  if (curriculum !== 'tt_primary') throw new Error(`Unsupported curriculum: ${curriculum}`);
-  const subjectKey = subject.replace(/-/g, '_');
-  const allTopics = TAXONOMY[level]?.[subjectKey];
-  if (!Array.isArray(allTopics)) throw new Error(`No capstone taxonomy for ${level}/${subject}`);
-  const match = allTopics.find(t => t.topic === topic);
-  if (!match) throw new Error(`Topic "${topic}" not found in ${level}/${subject} taxonomy`);
-  return { objectives: match.subtopics };
 }
 
 // ── Quest ID builder ──────────────────────────────────────────────────────────
@@ -97,7 +75,7 @@ async function generateQuestContent({
   subtopicIndex = null,
 }) {
   const now = new Date().toISOString();
-  const isCapstone = isCapstoneLevel(curriculum, level);
+  const isCapstone = await curriculumDB.isCapstoneLevel(curriculum, level);
 
   let module_number  = null;
   let module_title   = null;
@@ -109,11 +87,11 @@ async function generateQuestContent({
   if (isCapstone) {
     // Path B — capstone topic-scoped (std_5)
     if (!topic) throw new Error('topic is required for capstone Quest generation');
-    const data = getTopicData(curriculum, level, subject, topic);
+    const data = await curriculumDB.getTopicByTitle(curriculum, level, subject, topic);
     objectives = data.objectives;
   } else if (subtopicIndex !== null && subtopicIndex !== undefined && moduleIndex !== null) {
     // Path C — single subtopic per quest (std_4 new format)
-    const data = getSubtopicData(curriculum, level, subject, period, moduleIndex, subtopicIndex);
+    const data = await curriculumDB.getSubtopicByOrder(curriculum, level, subject, period, moduleIndex, subtopicIndex);
     module_number   = data.module_number;
     module_title    = data.module_title;
     subtopic        = data.subtopic;
@@ -125,7 +103,7 @@ async function generateQuestContent({
     if (moduleIndex === null || moduleIndex === undefined) {
       throw new Error('moduleIndex is required for period-scoped Quest generation');
     }
-    const data = getModuleData(curriculum, level, subject, period, moduleIndex);
+    const data = await curriculumDB.getModuleByIndex(curriculum, level, subject, period, moduleIndex);
     module_number = data.module_number;
     module_title  = data.module_title;
     objectives    = data.objectives;

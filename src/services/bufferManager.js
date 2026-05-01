@@ -1,5 +1,5 @@
 const { generateExamPackage, storePackage } = require('./examGenerator');
-const { CURRICULUM_CONFIG, TAXONOMY, isCapstoneLevel, getCapstoneSubjectConfig, supportsSeaPaper } = require('../config/taxonomy');
+const curriculumDB = require('./curriculumDB');
 const getSupabase = require('../config/supabase');
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -134,75 +134,33 @@ async function checkAndRefill(combo) {
 
 // ── Build all combinations for a curriculum ───────────────────────────────────
 
-function getAllCombinations(curriculumId = 'tt_primary') {
-  const config = CURRICULUM_CONFIG[curriculumId];
-  if (!config) return [];
+async function getAllCombinations(curriculumId = 'tt_primary') {
+  const structureRows = await curriculumDB.getAllActiveStructure(curriculumId);
+  if (!structureRows || structureRows.length === 0) return [];
 
   const combos = [];
+  // Cache distinct topics per capstone (level, subject) to avoid repeated DB calls
+  const capstoneTopicsCache = new Map();
 
-  for (const levelObj of config.levels) {
-    const { id: level, has_periods, is_capstone } = levelObj;
+  for (const row of structureRows) {
+    const { level_id: level, is_capstone, period_id: period, subject, trial_type, difficulty } = row;
 
-    for (const subject of config.subjects) {
-      if (is_capstone) {
-        // Topic practice (each topic × each difficulty)
-        const subjectTopics = TAXONOMY[level]?.[subject.replace('-', '_')] || [];
-        for (const topicObj of subjectTopics) {
-          for (const diff of ['easy', 'medium', 'hard']) {
-            combos.push({
-              curriculum: curriculumId,
-              level,
-              period: null,
-              subject,
-              trial_type: 'practice',
-              difficulty: diff,
-              topic: topicObj.topic
-            });
-          }
-        }
+    if (trial_type === 'sea_paper') {
+      combos.push({ curriculum: curriculumId, level, period: null, subject, trial_type: 'sea_paper', difficulty: null, topic: null });
 
-        // Full SEA paper (only subjects that support it)
-        if (supportsSeaPaper(curriculumId, subject)) {
-          combos.push({
-            curriculum: curriculumId,
-            level,
-            period: null,
-            subject,
-            trial_type: 'sea_paper',
-            difficulty: null,
-            topic: null
-          });
-        }
-
-      } else if (has_periods) {
-        // Period-scoped practice
-        for (const period of config.periods) {
-          for (const diff of ['easy', 'medium', 'hard']) {
-            combos.push({
-              curriculum: curriculumId,
-              level,
-              period,
-              subject,
-              trial_type: 'practice',
-              difficulty: diff,
-              topic: null
-            });
-          }
-        }
-      } else {
-        // No periods, no capstone (e.g. future CXC Form 4)
-        for (const diff of ['easy', 'medium', 'hard']) {
-          combos.push({
-            curriculum: curriculumId,
-            level,
-            period: null,
-            subject,
-            trial_type: 'practice',
-            difficulty: diff,
-            topic: null
-          });
-        }
+    } else if (is_capstone && trial_type === 'practice') {
+      // Expand each (level, subject, difficulty) row into one combo per capstone topic
+      const cacheKey = `${level}:${subject}`;
+      if (!capstoneTopicsCache.has(cacheKey)) {
+        const titles = await curriculumDB.getDistinctModuleTitles(curriculumId, level, subject, null);
+        capstoneTopicsCache.set(cacheKey, titles);
       }
+      for (const topic of capstoneTopicsCache.get(cacheKey)) {
+        combos.push({ curriculum: curriculumId, level, period: null, subject, trial_type: 'practice', difficulty, topic });
+      }
+
+    } else {
+      combos.push({ curriculum: curriculumId, level, period: period || null, subject, trial_type: 'practice', difficulty, topic: null });
     }
   }
 
@@ -218,7 +176,7 @@ async function nightlyScan(curriculumId = 'tt_primary') {
     return { skipped: true };
   }
 
-  const combos = getAllCombinations(curriculumId);
+  const combos = await getAllCombinations(curriculumId);
   let generated = 0;
   let errors = 0;
 

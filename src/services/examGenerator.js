@@ -1,7 +1,7 @@
 const { getEmbedding } = require('./embeddings');
 const { getIndex } = require('./pinecone');
 const { generateContent } = require('./ai');
-const { TAXONOMY, EXAM_CONFIG, CURRICULUM_CONFIG, isCapstoneLevel, getCapstoneSubjectConfig } = require('../config/taxonomy');
+const curriculumDB = require('./curriculumDB');
 const { PROMPTS } = require('../config/prompts');
 const getSupabase = require('../config/supabase');
 const crypto = require('crypto');
@@ -27,37 +27,6 @@ async function getCurriculumChunks(curriculum, level, subject, period, topic) {
     console.error('Pinecone query failed, using taxonomy only:', err.message);
     return '';
   }
-}
-
-// ── Taxonomy helpers ──────────────────────────────────────────────────────────
-
-function getTopicsForExam(curriculum, level, subject, period, topic) {
-  const subjectKey = subject.replace('-', '_');
-
-  if (curriculum === 'tt_primary') {
-    if (isCapstoneLevel(curriculum, level)) {
-      // std_5: topic practice — find matching topic in taxonomy
-      const allTopics = TAXONOMY.std_5[subjectKey] || [];
-      if (topic) {
-        const match = allTopics.find(t => t.topic === topic);
-        return match ? [match] : allTopics;
-      }
-      return allTopics;
-    } else {
-      // std_4: period-scoped
-      const termTopics = TAXONOMY.std_4[subjectKey]?.[period];
-      if (!termTopics) throw new Error(`No taxonomy found for ${level} ${subject} ${period}`);
-      return termTopics;
-    }
-  }
-
-  throw new Error(`Unsupported curriculum: ${curriculum}`);
-}
-
-function getTopicsForSeaPaper(curriculum, subject) {
-  const capstoneConfig = getCapstoneSubjectConfig(curriculum, subject);
-  if (!capstoneConfig) throw new Error(`No capstone config for ${curriculum} ${subject}`);
-  return capstoneConfig;
 }
 
 // ── Fingerprinting ─────────────────────────────────────────────────────────────
@@ -171,21 +140,20 @@ function buildAnswerSheet(questions) {
 
 async function generateExamPackage({ curriculum = 'tt_primary', level, period, subject, difficulty, trial_type = 'practice', topic = null }) {
   const now = new Date().toISOString();
-  const isCapstone = isCapstoneLevel(curriculum, level);
+  const isCapstone = await curriculumDB.isCapstoneLevel(curriculum, level);
   const isSeaPaper = trial_type === 'sea_paper';
 
   let promptFn, config, topics, curriculumChunks, packageId, prompt;
 
   if (isSeaPaper) {
     // ── Full SEA Paper ──────────────────────────────────────────────────────
-    const capstoneConfig = getTopicsForSeaPaper(curriculum, subject);
-    config = EXAM_CONFIG[curriculum]?.sea_paper?.[subject];
+    const capstoneConfig = await curriculumDB.getTopicsForSeaPaper(curriculum, subject);
+    config = await curriculumDB.getExamConfig(curriculum, 'sea_paper', subject);
     if (!config) throw new Error(`No sea_paper config for ${curriculum} ${subject}`);
 
     packageId = generatePackageId(curriculum, level, null, subject, null, 'sea_paper', null);
 
-    // Build full topic list from capstone subject taxonomy
-    const allTopics = TAXONOMY[level]?.[subject.replace('-', '_')] || [];
+    const allTopics = await curriculumDB.getTopicsForExam(curriculum, level, subject, null, null);
     const topicList = buildTopicList(allTopics);
     const topicWeightings = buildSeaTopicWeightings(capstoneConfig);
 
@@ -205,10 +173,10 @@ async function generateExamPackage({ curriculum = 'tt_primary', level, period, s
 
   } else if (isCapstone && topic) {
     // ── Std 5 Topic Practice ────────────────────────────────────────────────
-    config = EXAM_CONFIG[curriculum]?.practice?.[difficulty];
+    config = await curriculumDB.getExamConfig(curriculum, 'practice', difficulty);
     if (!config) throw new Error(`No practice config for ${curriculum} ${difficulty}`);
 
-    topics = getTopicsForExam(curriculum, level, subject, null, topic);
+    topics = await curriculumDB.getTopicsForExam(curriculum, level, subject, null, topic);
     packageId = generatePackageId(curriculum, level, null, subject, difficulty, 'practice', topic);
     curriculumChunks = await getCurriculumChunks(curriculum, level, subject, null, topic);
     const topicList = buildTopicList(topics);
@@ -229,10 +197,10 @@ async function generateExamPackage({ curriculum = 'tt_primary', level, period, s
 
   } else {
     // ── Standard period-scoped practice (e.g. Std 4 term_1) ────────────────
-    config = EXAM_CONFIG[curriculum]?.practice?.[difficulty];
+    config = await curriculumDB.getExamConfig(curriculum, 'practice', difficulty);
     if (!config) throw new Error(`No practice config for ${curriculum} ${difficulty}`);
 
-    topics = getTopicsForExam(curriculum, level, subject, period, null);
+    topics = await curriculumDB.getTopicsForExam(curriculum, level, subject, period, null);
     packageId = generatePackageId(curriculum, level, period, subject, difficulty, 'practice', null);
     curriculumChunks = await getCurriculumChunks(curriculum, level, subject, period, null);
     const topicList = buildTopicList(topics);

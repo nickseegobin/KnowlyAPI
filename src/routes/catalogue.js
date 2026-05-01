@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { TAXONOMY, CURRICULUM_CONFIG, isCapstoneLevel, getCapstoneSubjectConfig, supportsSeaPaper } = require('../config/taxonomy');
+const { getAllCombinations } = require('../services/bufferManager');
 const getSupabase = require('../config/supabase');
 
 // ── GET /api/v1/catalogue ─────────────────────────────────────────────────────
@@ -12,81 +12,8 @@ router.get('/', async (req, res) => {
   const { curriculum = 'tt_primary' } = req.query;
 
   try {
-    const config = CURRICULUM_CONFIG[curriculum];
-    if (!config) {
-      return res.status(400).json({ error: `Unknown curriculum: ${curriculum}`, code: 'invalid_curriculum' });
-    }
-
-    // ── Build all combinations ─────────────────────────────────────────────
-    const combinations = [];
-
-    for (const levelObj of config.levels) {
-      const { id: level, has_periods, is_capstone } = levelObj;
-
-      for (const subject of config.subjects) {
-        if (is_capstone) {
-          // ── Capstone topic practice per topic ──────────────────────────
-          const subjectKey = subject.replace('-', '_');
-          const subjectTopics = TAXONOMY[level]?.[subjectKey] || [];
-
-          for (const topicObj of subjectTopics) {
-            for (const diff of ['easy', 'medium', 'hard']) {
-              combinations.push({
-                curriculum,
-                level,
-                period: null,
-                subject,
-                topic: topicObj.topic,
-                trial_type: 'practice',
-                difficulty: diff
-              });
-            }
-          }
-
-          // ── Capstone full SEA paper (only subjects that support it) ────
-          if (supportsSeaPaper(curriculum, subject)) {
-            combinations.push({
-              curriculum,
-              level,
-              period: null,
-              subject,
-              topic: null,
-              trial_type: 'sea_paper',
-              difficulty: null
-            });
-          }
-
-        } else if (has_periods) {
-          // ── Period-scoped practice ─────────────────────────────────────
-          for (const period of config.periods) {
-            for (const diff of ['easy', 'medium', 'hard']) {
-              combinations.push({
-                curriculum,
-                level,
-                period,
-                subject,
-                topic: null,
-                trial_type: 'practice',
-                difficulty: diff
-              });
-            }
-          }
-        } else {
-          // ── No periods, no capstone ────────────────────────────────────
-          for (const diff of ['easy', 'medium', 'hard']) {
-            combinations.push({
-              curriculum,
-              level,
-              period: null,
-              subject,
-              topic: null,
-              trial_type: 'practice',
-              difficulty: diff
-            });
-          }
-        }
-      }
-    }
+    // ── Build all combinations from DB ─────────────────────────────────────
+    const combinations = await getAllCombinations(curriculum);
 
     // ── Pull approved pool counts from Supabase ────────────────────────────
     const { data: poolRows, error } = await getSupabase()
