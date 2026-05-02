@@ -27,6 +27,8 @@ router.get('/db-check', async (req, res) => {
     'capstone_topic_weightings',
     'question_fingerprints',
     'exam_pool',
+    'question_bank',
+    'question_bank_queue',
   ];
 
   const results = {};

@@ -176,6 +176,130 @@ Return this exact structure:
   "answer_sheet": []
 }`,
 
+    // ── Question Bank: Subtopic scope ─────────────────────────────────────────
+    // Generates individual questions for one learning objective.
+    question_bank_subtopic: ({ level, subject, topic, moduleTitle, difficulty, count, topicDetail, curriculumChunks, now }) => `You are a T&T primary school exam writer. Generate individual question bank questions. Return ONLY a valid JSON array, no other text.
+
+PARAMETERS:
+- Level: ${level === 'std_4' ? 'Standard 4' : level === 'std_5' ? 'Standard 5 SEA Prep' : level}
+- Subject: ${subject}
+- Module: ${moduleTitle}
+- Subtopic: ${topic}
+- Difficulty: ${difficulty}
+- Questions needed: ${count}
+
+SUBTOPIC DETAIL:
+${topicDetail}
+${curriculumChunks ? `\nCURRICULUM NOTES:\n${curriculumChunks.slice(0, 600)}\n` : ''}
+RULES:
+1. Exactly ${count} questions, ALL focused on the subtopic: "${topic}"
+2. 4 options each (A/B/C/D), exactly one correct answer
+3. Use Caribbean names and contexts (Marcus, Keisha, Rajiv, Asha, Dario, Shantel, etc.)
+4. Each question tests a distinct aspect of the learning objective — no repetition
+5. Distractors must reflect common student misconceptions, not random wrong answers
+6. question_id must be unique — use format: qb-<8 random hex chars>
+7. cognitive_level: 'knowledge' | 'comprehension' | 'application' | 'analysis'
+8. tip = a hint that guides thinking without revealing the answer
+9. explanation = why the correct answer is right (shown after submission)
+10. OPTIONAL content codes in question text:
+    - [hide]word[/hide] — hides a word for fill-in questions
+    - [blank] — omits a word for fill-in-the-blank
+    - [emphasize]text[/emphasize] — highlights a key term
+
+Return ONLY this JSON array (no wrapper object, no markdown):
+[
+  {
+    "question_id": "qb-a1b2c3d4",
+    "topic": "${topic}",
+    "module_title": "${moduleTitle}",
+    "difficulty": "${difficulty}",
+    "question": "...",
+    "options": { "A": "...", "B": "...", "C": "...", "D": "..." },
+    "correct_answer": "A",
+    "explanation": "Why A is correct...",
+    "tip": "A hint that guides without revealing...",
+    "cognitive_level": "application"
+  }
+]`,
+
+    // ── Question Bank: General Topic scope ─────────────────────────────────────
+    // Questions spread across all subtopics within a module.
+    question_bank_general_topic: ({ level, subject, moduleTitle, topics, difficulty, count, curriculumChunks, now }) => `You are a T&T primary school exam writer. Generate individual question bank questions covering an entire module. Return ONLY a valid JSON array, no other text.
+
+PARAMETERS:
+- Level: ${level === 'std_4' ? 'Standard 4' : level === 'std_5' ? 'Standard 5 SEA Prep' : level}
+- Subject: ${subject}
+- Module: ${moduleTitle}
+- Difficulty: ${difficulty}
+- Questions needed: ${count}
+
+SUBTOPICS TO COVER (distribute questions across all of these):
+${topics.map((t, i) => `${i + 1}. ${t}`).join('\n')}
+${curriculumChunks ? `\nCURRICULUM NOTES:\n${curriculumChunks.slice(0, 800)}\n` : ''}
+RULES:
+1. Exactly ${count} questions distributed across the subtopics listed
+2. At least 1 question per subtopic — spread as evenly as possible
+3. 4 options each (A/B/C/D), exactly one correct answer
+4. Use Caribbean names and contexts (Marcus, Keisha, Rajiv, Asha, Dario, Shantel, etc.)
+5. question_id: unique, format qb-<8 random hex chars>
+6. topic field must match the EXACT subtopic name from the list above
+7. cognitive_level: 'knowledge' | 'comprehension' | 'application' | 'analysis'
+
+Return ONLY this JSON array:
+[
+  {
+    "question_id": "qb-a1b2c3d4",
+    "topic": "exact subtopic name from the list",
+    "module_title": "${moduleTitle}",
+    "difficulty": "${difficulty}",
+    "question": "...",
+    "options": { "A": "...", "B": "...", "C": "...", "D": "..." },
+    "correct_answer": "A",
+    "explanation": "...",
+    "tip": "...",
+    "cognitive_level": "application"
+  }
+]`,
+
+    // ── Question Bank: Period scope ─────────────────────────────────────────────
+    // Questions spread across all topics and modules in a full term.
+    question_bank_period: ({ level, period, subject, allTopics, difficulty, count, curriculumChunks, now }) => `You are a T&T primary school exam writer. Generate individual question bank questions covering a full term. Return ONLY a valid JSON array, no other text.
+
+PARAMETERS:
+- Level: ${level === 'std_4' ? 'Standard 4' : level === 'std_5' ? 'Standard 5 SEA Prep' : level}
+- Period: ${period}
+- Subject: ${subject}
+- Difficulty: ${difficulty}
+- Questions needed: ${count}
+
+ALL TOPICS IN THIS TERM (distribute questions across these):
+${allTopics.map((t, i) => `${i + 1}. [${t.moduleTitle}] ${t.topic}`).join('\n')}
+${curriculumChunks ? `\nCURRICULUM NOTES:\n${curriculumChunks.slice(0, 1000)}\n` : ''}
+RULES:
+1. Exactly ${count} questions distributed broadly across modules and topics
+2. Cover at least 70% of the topics listed — prioritise breadth
+3. 4 options each (A/B/C/D), exactly one correct answer
+4. Use Caribbean names and contexts
+5. question_id: unique, format qb-<8 random hex chars>
+6. topic and module_title fields must match EXACT strings from the list above
+7. cognitive_level: 'knowledge' | 'comprehension' | 'application' | 'analysis'
+
+Return ONLY this JSON array:
+[
+  {
+    "question_id": "qb-a1b2c3d4",
+    "topic": "exact topic from list",
+    "module_title": "exact module from list",
+    "difficulty": "${difficulty}",
+    "question": "...",
+    "options": { "A": "...", "B": "...", "C": "...", "D": "..." },
+    "correct_answer": "A",
+    "explanation": "...",
+    "tip": "...",
+    "cognitive_level": "application"
+  }
+]`,
+
     // ── Quest Module ────────────────────────────────────────────────────────────
     quest: ({ level, period, subject, topic, moduleNumber, moduleTitle, objectives, curriculumChunks, questId, now, singleObjective = false }) => `You are a T&T primary school curriculum writer. Generate a structured Quest learning module. Return ONLY valid JSON, no other text.
 

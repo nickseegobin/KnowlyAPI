@@ -27,6 +27,8 @@ const analyticsRouter   = require('./routes/analytics');
 const trainingRouter    = require('./routes/training');
 const trialEditorRouter        = require('./routes/trialEditor');
 const curriculumTopicsRouter   = require('./routes/curriculumTopics');
+const questionBankRouter       = require('./routes/questionBank');
+const trialStartRouter         = require('./routes/trialStart');
 
 
 
@@ -50,6 +52,8 @@ app.use('/api/v1/analytics',   analyticsRouter);
 app.use('/api/v1/training',    trainingRouter);
 app.use('/api/v1/trial-editor',      trialEditorRouter);
 app.use('/api/v1/curriculum-topics', curriculumTopicsRouter);
+app.use('/api/v1/question-bank',     questionBankRouter);
+app.use('/api/v1/trial',             trialStartRouter);
 
 
 // 404 handler
