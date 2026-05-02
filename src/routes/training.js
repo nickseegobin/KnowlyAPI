@@ -116,6 +116,37 @@ router.get('/list', requireServerKey, async (req, res) => {
   }
 });
 
+// ── GET /api/v1/training/fetch ────────────────────────────────────────────────
+// Fetch one vector by ID (any prefix — works for tm-* and ct-* alike).
+// Query: ?id=ct-291
+router.get('/fetch', requireServerKey, async (req, res) => {
+  const { id } = req.query;
+
+  if (!id) {
+    return res.status(400).json({ error: 'id query param required', code: 'missing_fields' });
+  }
+
+  try {
+    const index   = getIndex();
+    const fetched = await index.fetch([id]);
+    const record  = (fetched.records || {})[id];
+
+    if (!record) {
+      return res.json({ exists: false, vector_id: id });
+    }
+
+    return res.json({
+      exists:    true,
+      vector_id: id,
+      metadata:  record.metadata || {},
+    });
+
+  } catch (err) {
+    console.error('[training/fetch] Error:', err);
+    return res.status(500).json({ error: 'Failed to fetch vector', code: 'server_error', details: err.message });
+  }
+});
+
 // ── DELETE /api/v1/training/delete ───────────────────────────────────────────
 // Delete a single vector from Pinecone.
 // Body: { vector_id }
