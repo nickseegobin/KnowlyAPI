@@ -1,6 +1,19 @@
 const express = require('express');
 const router  = express.Router();
-const getSupabase = require('../config/supabase');
+const getSupabase   = require('../config/supabase');
+const { syncTopic, removeTopicVector, bulkSyncTopics } = require('../services/pineconeSync');
+
+function fireSyncTopic(row) {
+  setImmediate(() =>
+    syncTopic(row).catch(err => console.error(`[curriculum-topics] Pinecone sync failed id=${row.id}: ${err.message}`))
+  );
+}
+
+function fireRemoveTopic(id) {
+  setImmediate(() =>
+    removeTopicVector(id).catch(err => console.error(`[curriculum-topics] Pinecone remove failed id=${id}: ${err.message}`))
+  );
+}
 
 function requireServerKey(req, res, next) {
   const key = req.headers['x-aep-server-key'];
@@ -87,6 +100,7 @@ router.post('/', requireServerKey, async (req, res) => {
       throw error;
     }
 
+    fireSyncTopic(data);
     return res.status(201).json(data);
   } catch (err) {
     console.error('[curriculum-topics] create error:', err.message);
@@ -120,6 +134,12 @@ router.patch('/:id', requireServerKey, async (req, res) => {
     if (error) throw error;
     if (!data) return res.status(404).json({ error: 'Topic not found', code: 'not_found' });
 
+    if (data.status === 'archived') {
+      fireRemoveTopic(data.id);
+    } else {
+      fireSyncTopic(data);
+    }
+
     return res.json(data);
   } catch (err) {
     console.error('[curriculum-topics] update error:', err.message);
@@ -144,10 +164,52 @@ router.delete('/:id', requireServerKey, async (req, res) => {
     if (error) throw error;
     if (!data) return res.status(404).json({ error: 'Topic not found', code: 'not_found' });
 
+    fireRemoveTopic(id);
     return res.json({ id, archived: true });
   } catch (err) {
     console.error('[curriculum-topics] archive error:', err.message);
     return res.status(500).json({ error: 'Failed to archive topic', code: 'server_error' });
+  }
+});
+
+// ── POST /api/v1/curriculum-topics/sync ──────────────────────────────────────
+// Bulk-upsert all active curriculum topics into Pinecone.
+// Optional body: { curriculum, level, period, subject } to scope the backfill.
+// Safe to run multiple times (upsert is idempotent).
+router.post('/sync', requireServerKey, async (req, res) => {
+  const { curriculum = 'tt_primary', level, period, subject } = req.body || {};
+
+  try {
+    let query = getSupabase()
+      .from('curriculum_topics')
+      .select('*')
+      .eq('status', 'active')
+      .eq('curriculum', curriculum)
+      .order('sort_order', { ascending: true });
+
+    if (level)   query = query.eq('level', level);
+    if (subject) query = query.eq('subject', subject);
+    if (period !== undefined) {
+      if (period === null || period === 'null' || period === '') {
+        query = query.is('period', null);
+      } else {
+        query = query.eq('period', period);
+      }
+    }
+
+    const { data: rows, error } = await query;
+    if (error) throw error;
+
+    if (!rows || !rows.length) {
+      return res.json({ synced: 0, failed: 0, total: 0, message: 'No active topics matched the filter.' });
+    }
+
+    const result = await bulkSyncTopics(rows);
+    return res.json(result);
+
+  } catch (err) {
+    console.error('[curriculum-topics/sync] error:', err.message);
+    return res.status(500).json({ error: 'Bulk sync failed', code: 'server_error', details: err.message });
   }
 });
 
