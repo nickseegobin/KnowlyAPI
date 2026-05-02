@@ -59,10 +59,18 @@ async function buildPrompt(curriculum, level, period, subject, scope, scopeRef, 
   if (scope === 'subtopic') {
     const allRows = await curriculumDB.getTopicsForExam(curriculum, level, subject, period || null, null);
     const topicRow = allRows.find(r => slugify(r.topic) === scopeRef);
-    if (!topicRow) throw new Error(`No curriculum row for subtopic scope_ref: ${scopeRef}`);
 
-    const topicName   = topicRow.topic;
-    const moduleTitle = topicRow.module_title || topicName;
+    let topicName, moduleTitle;
+    if (topicRow) {
+      topicName   = topicRow.topic;
+      moduleTitle = topicRow.module_title || topicName;
+    } else {
+      // Fallback: humanize the scope_ref when no exact curriculum match found
+      topicName   = scopeRef.replace(/_/g, ' ');
+      moduleTitle = topicName;
+      console.warn(`[qbGen] No curriculum row for subtopic scope_ref: ${scopeRef} — using humanized fallback`);
+    }
+
     const topicDetail = `Topic: ${topicName}\nModule: ${moduleTitle}`;
     const chunks      = await getRAGChunks(curriculum, level, subject, period, topicName);
 
@@ -74,13 +82,21 @@ async function buildPrompt(curriculum, level, period, subject, scope, scopeRef, 
   }
 
   if (scope === 'general_topic') {
-    const allRows   = await curriculumDB.getTopicsForExam(curriculum, level, subject, period || null, null);
+    const allRows    = await curriculumDB.getTopicsForExam(curriculum, level, subject, period || null, null);
     const moduleRows = allRows.filter(r => slugify(r.module_title || '') === scopeRef);
-    if (!moduleRows.length) throw new Error(`No rows for general_topic scope_ref: ${scopeRef}`);
 
-    const moduleTitle = moduleRows[0].module_title;
-    const topics      = moduleRows.map(r => r.topic);
-    const chunks      = await getRAGChunks(curriculum, level, subject, period, moduleTitle);
+    let moduleTitle, topics;
+    if (moduleRows.length) {
+      moduleTitle = moduleRows[0].module_title;
+      topics      = moduleRows.map(r => r.topic);
+    } else {
+      // Fallback: humanize the scope_ref when no exact curriculum match found
+      moduleTitle = scopeRef.replace(/_/g, ' ');
+      topics      = [moduleTitle];
+      console.warn(`[qbGen] No rows for general_topic scope_ref: ${scopeRef} — using humanized fallback`);
+    }
+
+    const chunks = await getRAGChunks(curriculum, level, subject, period, moduleTitle);
 
     return {
       prompt:      prompts.question_bank_general_topic({ level, subject, moduleTitle, topics, difficulty, count, curriculumChunks: chunks, now }),
