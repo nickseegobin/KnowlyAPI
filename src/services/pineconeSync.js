@@ -50,7 +50,15 @@ async function syncTopic(row) {
 async function removeTopicVector(topicId) {
   const vid   = vectorId(topicId);
   const index = getIndex();
-  await index.deleteOne({ id: vid });
+  try {
+    await index.deleteOne({ id: vid });
+  } catch (err) {
+    if (err?.status === 404 || err?.message?.includes('404')) {
+      console.log(`[pineconeSync] ${vid} already absent — skipping delete`);
+      return vid;
+    }
+    throw err;
+  }
   console.log(`[pineconeSync] deleted ${vid}`);
   return vid;
 }
