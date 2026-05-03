@@ -142,8 +142,13 @@ router.get('/fetch', requireServerKey, async (req, res) => {
     });
 
   } catch (err) {
-    console.error('[training/fetch] Error:', err);
-    return res.status(500).json({ error: 'Failed to fetch vector', code: 'server_error', details: err.message });
+    console.error('[training/fetch] Error:', err.message, err.cause?.message || '');
+    return res.status(500).json({
+      error:   'Failed to fetch vector',
+      code:    'server_error',
+      details: err.message,
+      cause:   err.cause?.message || null,
+    });
   }
 });
 
