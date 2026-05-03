@@ -28,7 +28,7 @@ async function syncTopic(row) {
   const embedding = await getEmbedding(text);
   const index     = getIndex();
 
-  await index.upsert([{
+  await index.upsert({ records: [{
     id:     vid,
     values: embedding,
     metadata: {
@@ -40,7 +40,7 @@ async function syncTopic(row) {
       module_title: row.module_title || null,
       text,
     },
-  }]);
+  }] });
 
   console.log(`[pineconeSync] upserted ${vid}: ${row.topic}`);
   return vid;
@@ -50,7 +50,7 @@ async function syncTopic(row) {
 async function removeTopicVector(topicId) {
   const vid   = vectorId(topicId);
   const index = getIndex();
-  await index.deleteOne(vid);
+  await index.deleteOne({ id: vid });
   console.log(`[pineconeSync] deleted ${vid}`);
   return vid;
 }

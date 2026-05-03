@@ -26,7 +26,7 @@ router.post('/upsert', requireServerKey, async (req, res) => {
     const embedding = await getEmbedding(content_text);
 
     const index = getIndex();
-    await index.upsert([{
+    await index.upsert({ records: [{
       id: vector_id,
       values: embedding,
       metadata: {
@@ -38,7 +38,7 @@ router.post('/upsert', requireServerKey, async (req, res) => {
         subtopic:   metadata.subtopic   || null,
         text:       content_text,
       },
-    }]);
+    }] });
 
     console.log(`[training/upsert] Upserted vector: ${vector_id}`);
     return res.json({ vector_id, status: 'upserted' });
@@ -87,7 +87,7 @@ router.get('/list', requireServerKey, async (req, res) => {
     const items = [];
     for (let i = 0; i < allIds.length; i += 100) {
       const batch    = allIds.slice(i, i + 100);
-      const fetched  = await index.fetch(batch);
+      const fetched  = await index.fetch({ ids: batch });
       for (const [id, vec] of Object.entries(fetched.records || {})) {
         const meta = vec.metadata || {};
         // Apply optional filters
@@ -128,7 +128,7 @@ router.get('/fetch', requireServerKey, async (req, res) => {
 
   try {
     const index   = getIndex();
-    const fetched = await index.fetch([id]);
+    const fetched = await index.fetch({ ids: [id] });
     const record  = (fetched.records || {})[id];
 
     if (!record) {
@@ -164,7 +164,7 @@ router.delete('/delete', requireServerKey, async (req, res) => {
 
   try {
     const index = getIndex();
-    await index.deleteOne(vector_id);
+    await index.deleteOne({ id: vector_id });
 
     console.log(`[training/delete] Deleted vector: ${vector_id}`);
     return res.json({ vector_id, status: 'deleted' });

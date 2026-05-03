@@ -22,7 +22,7 @@ async function queryIndex({ level, period, subject, topK = 10 }) {
 
 async function upsertChunks(chunks) {
   const index = getIndex();
-  await index.upsert(chunks);
+  await index.upsert({ records: chunks });
 }
 
 module.exports = { getIndex, queryIndex, upsertChunks };
