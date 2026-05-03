@@ -1,18 +1,18 @@
-const OpenAI = require('openai');
+const { VoyageAIClient } = require('voyageai');
 
 let client = null;
 
-function getOpenAI() {
+function getVoyage() {
   if (!client) {
-    client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    client = new VoyageAIClient({ apiKey: process.env.VOYAGE_API_KEY });
   }
   return client;
 }
 
 async function getEmbedding(text) {
-  const response = await getOpenAI().embeddings.create({
-    model: 'text-embedding-3-small',
-    input: text,
+  const response = await getVoyage().embed({
+    input: [text],
+    model: 'voyage-3',
   });
   return response.data[0].embedding;
 }
