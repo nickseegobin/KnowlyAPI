@@ -3,6 +3,10 @@ const router = express.Router();
 const { getIndex } = require('../services/pinecone');
 const { getEmbedding } = require('../services/embeddings');
 
+function slugify(str) {
+  return String(str).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+}
+
 // All training routes require the server key.
 function requireServerKey(req, res, next) {
   const key = req.headers['x-aep-server-key'];
@@ -173,6 +177,60 @@ router.delete('/delete', requireServerKey, async (req, res) => {
     console.error('[training/delete] Error:', err);
     return res.status(500).json({ error: 'Failed to delete vector', code: 'server_error', details: err.message });
   }
+});
+
+// ── POST /api/v1/training/import ─────────────────────────────────────────────
+// Bulk-embed and upsert an array of CSV rows into Pinecone.
+// Body: { rows: [{ curriculum, level, period, subject, module_title, topic, content }] }
+// Vector IDs are auto-generated: tm-{curriculum}-{level}-{subject}-{slugified_topic}
+router.post('/import', requireServerKey, async (req, res) => {
+  const { rows = [] } = req.body;
+
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return res.status(400).json({ error: 'rows array is required', code: 'missing_fields' });
+  }
+
+  let synced = 0, failed = 0;
+  const errors = [];
+
+  for (const row of rows) {
+    const { curriculum, level, period, subject, module_title, topic, content } = row;
+
+    if (!curriculum || !level || !subject || !topic || !content) {
+      errors.push({ topic: topic || '(unknown)', error: 'Missing required fields' });
+      failed++;
+      continue;
+    }
+
+    const vid = `tm-${curriculum}-${level}-${subject}-${slugify(topic)}`;
+
+    try {
+      const embedding = await getEmbedding(content);
+      const index = getIndex();
+      await index.upsert({ records: [{
+        id:     vid,
+        values: embedding,
+        metadata: {
+          curriculum,
+          level,
+          period:       period       || null,
+          subject,
+          topic,
+          module_title: module_title || null,
+          text:         content,
+        },
+      }] });
+      console.log(`[training/import] upserted ${vid}`);
+      synced++;
+    } catch (err) {
+      console.error(`[training/import] failed "${topic}": ${err.message}`);
+      errors.push({ topic, error: err.message });
+      failed++;
+    }
+  }
+
+  console.log(`[training/import] done: ${synced} synced, ${failed} failed of ${rows.length}`);
+  return res.json({ synced, failed, total: rows.length, errors });
 });
 
 module.exports = router;
