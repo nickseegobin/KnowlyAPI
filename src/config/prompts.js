@@ -261,6 +261,49 @@ Return ONLY this JSON array:
   }
 ]`,
 
+    // ── Question Bank: Module scope (v2 — keyed by module_number) ─────────────
+    // Questions spread across all subtopics within one curriculum module.
+    // Used by the new module_number-based question bank (question_bank_v2).
+    question_bank_module: ({ level, period, subject, module_number, moduleTitle, subtopics, difficulty, count, curriculumChunks, now }) => `You are a T&T primary school exam writer. Generate individual question bank questions covering one curriculum module. Return ONLY a valid JSON array, no other text.
+
+PARAMETERS:
+- Level: ${level === 'std_4' ? 'Standard 4' : level === 'std_5' ? 'Standard 5 SEA Prep' : level}
+- Period: ${period || 'Capstone'}
+- Subject: ${subject}
+- Module ${module_number}: ${moduleTitle}
+- Difficulty: ${difficulty}
+- Questions needed: ${count}
+
+SUBTOPICS TO COVER (distribute questions evenly across all of these):
+${subtopics.map((t, i) => `${i + 1}. ${t}`).join('\n')}
+${curriculumChunks ? `\nCURRICULUM NOTES:\n${curriculumChunks.slice(0, 800)}\n` : ''}
+RULES:
+1. Exactly ${count} questions distributed across the subtopics listed
+2. At least 1 question per subtopic — spread as evenly as possible
+3. 4 options each (A/B/C/D), exactly one correct answer
+4. Use Caribbean names and contexts (Marcus, Keisha, Rajiv, Asha, Dario, Shantel, etc.)
+5. topic field must match the EXACT subtopic name from the list above
+6. cognitive_level: 'knowledge' | 'comprehension' | 'application' | 'analysis'
+7. tip = a hint that guides thinking without revealing the answer
+8. explanation = why the correct answer is right (shown after submission)
+9. OPTIONAL content codes: [hide]word[/hide], [blank], [emphasize]text[/emphasize]
+10. Each question must test a distinct concept — no two questions should be near-identical
+
+Return ONLY this JSON array (no wrapper object, no markdown):
+[
+  {
+    "topic": "exact subtopic name from the list above",
+    "module_title": "${moduleTitle}",
+    "difficulty": "${difficulty}",
+    "question": "...",
+    "options": { "A": "...", "B": "...", "C": "...", "D": "..." },
+    "correct_answer": "A",
+    "explanation": "Why A is correct...",
+    "tip": "A hint that guides without revealing...",
+    "cognitive_level": "application"
+  }
+]`,
+
     // ── Question Bank: Period scope ─────────────────────────────────────────────
     // Questions spread across all topics and modules in a full term.
     question_bank_period: ({ level, period, subject, allTopics, difficulty, count, curriculumChunks, now }) => `You are a T&T primary school exam writer. Generate individual question bank questions covering a full term. Return ONLY a valid JSON array, no other text.

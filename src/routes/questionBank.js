@@ -1,7 +1,8 @@
-const express  = require('express');
-const router   = express.Router();
-const getSupabase = require('../config/supabase');
-const { generateQuestions, checkAndReplenish } = require('../services/questionBankGenerator');
+const express       = require('express');
+const router        = express.Router();
+const getSupabase   = require('../config/supabase');
+const curriculumDB  = require('../services/curriculumDB');
+const { generateQuestions } = require('../services/questionBankGenerator');
 
 const requireServerKey = (req, res, next) => {
   const key = req.headers['x-aep-server-key'];
@@ -11,132 +12,144 @@ const requireServerKey = (req, res, next) => {
   next();
 };
 
-// ── GET /api/v1/question-bank/status ─────────────────────────────────────────
-// Pool counts grouped by (scope, scope_ref, difficulty).
-// Query: ?curriculum=tt_primary&level=std_4&subject=math
-router.get('/status', requireServerKey, async (req, res) => {
-  const { curriculum = 'tt_primary', level, subject } = req.query;
-  const supabase = getSupabase();
+// ── GET /api/v1/question-bank/list ────────────────────────────────────────────
+// Slot coverage stats for the WP Admin slot board.
+// Returns one row per (module_number × difficulty) combination for the given
+// curriculum/level/period/subject scope, including question counts.
+//
+// Query params: curriculum, level, period, subject
+router.get('/list', requireServerKey, async (req, res) => {
+  const { curriculum = 'tt_primary', level, subject, period } = req.query;
 
-  let query = supabase
-    .from('question_bank')
-    .select('scope, scope_ref, difficulty, used_count')
-    .eq('status', 'active')
-    .eq('curriculum', curriculum);
-
-  if (level)   query = query.eq('level', level);
-  if (subject) query = query.eq('subject', subject);
-
-  const { data, error } = await query;
-  if (error) return res.status(500).json({ error: error.message });
-
-  const map = {};
-  for (const row of data || []) {
-    const key = `${row.scope}::${row.scope_ref}::${row.difficulty}`;
-    if (!map[key]) map[key] = { scope: row.scope, scope_ref: row.scope_ref, difficulty: row.difficulty, total: 0, unused: 0 };
-    map[key].total++;
-    if (row.used_count === 0) map[key].unused++;
+  if (!level || !subject) {
+    return res.status(400).json({ error: 'level and subject are required', code: 'missing_fields' });
   }
 
-  return res.json({ curriculum, level: level || null, subject: subject || null, pools: Object.values(map) });
+  const supabase = getSupabase();
+
+  // Get all subtopics for this scope to derive the module list
+  const allRows = await curriculumDB
+    .getTopicsForExam(curriculum, level, subject, period || null, null)
+    .catch(() => []);
+
+  // Deduplicate to one entry per module_number
+  const moduleMap = new Map();
+  for (const row of allRows) {
+    if (row.module_number == null) continue;
+    if (!moduleMap.has(row.module_number)) {
+      moduleMap.set(row.module_number, {
+        module_number: row.module_number,
+        module_title:  row.module_title || `Module ${row.module_number}`,
+        sort_order:    row.sort_order   ?? row.module_number * 100,
+      });
+    }
+  }
+
+  if (!moduleMap.size) {
+    return res.json({ curriculum, level, period: period || null, subject, slots: [] });
+  }
+
+  // Count questions in the bank per (module_number, difficulty, status)
+  let countQuery = supabase
+    .from('question_bank')
+    .select('module_number, difficulty, status')
+    .eq('curriculum', curriculum)
+    .eq('level', level)
+    .eq('subject', subject);
+
+  if (period) countQuery = countQuery.eq('period', period);
+  else        countQuery = countQuery.is('period', null);
+
+  const { data: bankRows, error } = await countQuery;
+  if (error) return res.status(500).json({ error: error.message });
+
+  // Aggregate per slot key
+  const slotCounts = {};
+  for (const row of bankRows || []) {
+    const key = `${row.module_number}::${row.difficulty}`;
+    if (!slotCounts[key]) slotCounts[key] = { total: 0, active: 0 };
+    slotCounts[key].total++;
+    if (row.status === 'active') slotCounts[key].active++;
+  }
+
+  const modules      = [...moduleMap.values()].sort((a, b) => a.sort_order - b.sort_order);
+  const difficulties = ['easy', 'medium', 'hard'];
+
+  const slots = [];
+  for (const mod of modules) {
+    for (const diff of difficulties) {
+      const key    = `${mod.module_number}::${diff}`;
+      const counts = slotCounts[key] || { total: 0, active: 0 };
+      slots.push({
+        module_number:  mod.module_number,
+        module_title:   mod.module_title,
+        difficulty:     diff,
+        question_count: counts.total,
+        active_count:   counts.active,
+      });
+    }
+  }
+
+  return res.json({ curriculum, level, period: period || null, subject, slots });
 });
 
-// ── POST /api/v1/question-bank/replenish ─────────────────────────────────────
-// Enqueue a generation job (async) or run it immediately (sync=true).
-// Body: { curriculum, level, period, subject, scope, scope_ref, difficulty, target_count, sync }
-router.post('/replenish', requireServerKey, async (req, res) => {
+// ── POST /api/v1/question-bank/generate ──────────────────────────────────────
+// Generate questions for one slot (curriculum, level, period, subject,
+// module_number, difficulty).
+//
+// sync=false (default): returns immediately, generation runs in background.
+// sync=true:            waits for generation to complete (~30–60s).
+//
+// Body: { curriculum, level, period, subject, module_number, difficulty, count, sync }
+router.post('/generate', requireServerKey, async (req, res) => {
   const {
-    curriculum = 'tt_primary',
+    curriculum    = 'tt_primary',
     level,
     period,
     subject,
-    scope,
-    scope_ref,
+    module_number,
     difficulty,
-    target_count = 30,
-    sync = false,
+    count         = 30,
+    sync          = false,
   } = req.body;
 
-  if (!level || !subject || !scope || !scope_ref || !difficulty) {
+  if (!level || !subject || module_number == null || !difficulty) {
     return res.status(400).json({
-      error: 'Missing required fields: level, subject, scope, scope_ref, difficulty',
-      code: 'missing_fields',
+      error: 'Missing required fields: level, subject, module_number, difficulty',
+      code:  'missing_fields',
     });
   }
 
-  if (!['subtopic', 'general_topic', 'period'].includes(scope)) {
-    return res.status(400).json({ error: 'scope must be: subtopic | general_topic | period', code: 'invalid_scope' });
+  if (!['easy', 'medium', 'hard'].includes(difficulty)) {
+    return res.status(400).json({ error: 'difficulty must be easy | medium | hard', code: 'invalid_difficulty' });
   }
 
-  if (!['easy', 'medium', 'hard'].includes(difficulty)) {
-    return res.status(400).json({ error: 'difficulty must be: easy | medium | hard', code: 'invalid_difficulty' });
-  }
+  const slotLabel = `${level}/${period || 'cap'}/${subject}/module_${module_number}/${difficulty}`;
 
   if (sync) {
     try {
       const result = await generateQuestions({
-        curriculum, level, period, subject, scope, scopeRef: scope_ref, difficulty, count: target_count,
+        curriculum, level, period: period || null, subject, module_number, difficulty, count,
       });
-      return res.json({ queued: false, generated: true, ...result });
+      return res.json({ sync: true, ...result });
     } catch (err) {
-      console.error('[question-bank/replenish] Sync generation failed:', err.message);
+      console.error(`[question-bank/generate] Sync failed for ${slotLabel}:`, err.message);
       return res.status(500).json({ error: err.message, code: 'generation_failed' });
     }
   }
 
-  const supabase = getSupabase();
-  const { data: job, error } = await supabase
-    .from('question_bank_queue')
-    .insert({ curriculum, level, period: period || null, subject, scope, scope_ref, difficulty, target_count })
-    .select('id')
-    .single();
-
-  if (error) return res.status(500).json({ error: error.message });
+  // Fire-and-forget: respond immediately, generate in background
+  res.json({ sync: false, queued: true, slot: slotLabel });
 
   setImmediate(async () => {
     try {
       await generateQuestions({
-        curriculum, level, period, subject, scope, scopeRef: scope_ref, difficulty, count: target_count, jobId: job.id,
+        curriculum, level, period: period || null, subject, module_number, difficulty, count,
       });
     } catch (err) {
-      console.error('[question-bank/replenish] Background generation failed:', err.message);
+      console.error(`[question-bank/generate] Background generation failed for ${slotLabel}:`, err.message);
     }
   });
-
-  return res.json({ queued: true, job_id: job.id, target_count });
-});
-
-// ── POST /api/v1/question-bank/process-queue ─────────────────────────────────
-// Dequeue and process one pending job (called by cron every 6h).
-router.post('/process-queue', requireServerKey, async (req, res) => {
-  const supabase = getSupabase();
-
-  const { data: jobs } = await supabase
-    .from('question_bank_queue')
-    .select('*')
-    .eq('status', 'pending')
-    .order('requested_at', { ascending: true })
-    .limit(1);
-
-  if (!jobs?.length) return res.json({ processed: 0, message: 'No pending jobs' });
-
-  const job = jobs[0];
-  try {
-    const result = await generateQuestions({
-      curriculum: job.curriculum,
-      level:      job.level,
-      period:     job.period,
-      subject:    job.subject,
-      scope:      job.scope,
-      scopeRef:   job.scope_ref,
-      difficulty: job.difficulty,
-      count:      job.target_count,
-      jobId:      job.id,
-    });
-    return res.json({ processed: 1, job_id: job.id, ...result });
-  } catch (err) {
-    return res.status(500).json({ processed: 0, error: err.message, job_id: job.id });
-  }
 });
 
 module.exports = router;

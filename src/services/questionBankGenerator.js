@@ -1,46 +1,39 @@
-const { getEmbedding }   = require('./embeddings');
+const crypto              = require('crypto');
+const { getEmbedding }    = require('./embeddings');
 const { getIndex }        = require('./pinecone');
 const { generateContent } = require('./ai');
 const curriculumDB        = require('./curriculumDB');
 const { PROMPTS }         = require('../config/prompts');
 const getSupabase         = require('../config/supabase');
-const crypto              = require('crypto');
 
-const LOW_WATERMARK = 15;
 const TARGET_COUNT  = 30;
+const LOW_WATERMARK = 15;
 
-// ── Slug helpers ──────────────────────────────────────────────────────────────
+// ── Fingerprint ───────────────────────────────────────────────────────────────
+// SHA-256 of normalised question + options. Deduplicates identical questions
+// generated across separate runs.
 
-function slugify(str) {
-  return (str || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, '')
-    .trim()
-    .replace(/\s+/g, '_');
-}
-
-function buildScopeRef(scope, { topic, moduleTitle, period }) {
-  if (scope === 'subtopic')      return slugify(topic || '');
-  if (scope === 'general_topic') return slugify(moduleTitle || '');
-  if (scope === 'period')        return period || '';
-  throw new Error(`Unknown scope: ${scope}`);
-}
-
-function makeQuestionId() {
-  return `qb-${crypto.randomBytes(4).toString('hex')}`;
+function makeFingerprint(question, options) {
+  const normalised = [
+    question.trim().toLowerCase(),
+    (options.A || '').trim().toLowerCase(),
+    (options.B || '').trim().toLowerCase(),
+    (options.C || '').trim().toLowerCase(),
+    (options.D || '').trim().toLowerCase(),
+  ].join('|');
+  return crypto.createHash('sha256').update(normalised).digest('hex');
 }
 
 // ── Pinecone RAG context ──────────────────────────────────────────────────────
 
-async function getRAGChunks(curriculum, level, subject, period, topic) {
+async function getRAGChunks(curriculum, level, subject, period, moduleTitle) {
   try {
-    const queryText = `${curriculum} ${level} ${subject} ${period || ''} ${topic || ''} curriculum`.trim();
+    const queryText = `${curriculum} ${level} ${subject} ${period || ''} ${moduleTitle}`.trim();
     const embedding = await getEmbedding(queryText);
-    const index  = getIndex();
-    const filter = { curriculum, level, subject };
+    const index     = getIndex();
+    const filter    = { curriculum, level, subject };
     if (period) filter.period = period;
-    if (topic)  filter.topic  = topic;
-    const results = await index.query({ vector: embedding, topK: 6, filter, includeMetadata: true });
+    const results = await index.query({ vector: embedding, topK: 8, filter, includeMetadata: true });
     return results.matches.map(m => m.metadata?.text || '').filter(Boolean).join('\n\n');
   } catch (err) {
     console.error('[qbGen] Pinecone query failed:', err.message);
@@ -48,81 +41,7 @@ async function getRAGChunks(curriculum, level, subject, period, topic) {
   }
 }
 
-// ── Prompt builder ────────────────────────────────────────────────────────────
-
-async function buildPrompt(curriculum, level, period, subject, scope, scopeRef, difficulty, count) {
-  const prompts = PROMPTS[curriculum];
-  if (!prompts) throw new Error(`No prompts defined for curriculum: ${curriculum}`);
-
-  const now = new Date().toISOString();
-
-  if (scope === 'subtopic') {
-    const allRows = await curriculumDB.getTopicsForExam(curriculum, level, subject, period || null, null);
-    const topicRow = allRows.find(r => slugify(r.topic) === scopeRef);
-
-    let topicName, moduleTitle;
-    if (topicRow) {
-      topicName   = topicRow.topic;
-      moduleTitle = topicRow.module_title || topicName;
-    } else {
-      // Fallback: humanize the scope_ref when no exact curriculum match found
-      topicName   = scopeRef.replace(/_/g, ' ');
-      moduleTitle = topicName;
-      console.warn(`[qbGen] No curriculum row for subtopic scope_ref: ${scopeRef} — using humanized fallback`);
-    }
-
-    const topicDetail = `Topic: ${topicName}\nModule: ${moduleTitle}`;
-    const chunks      = await getRAGChunks(curriculum, level, subject, period, topicName);
-
-    return {
-      prompt:      prompts.question_bank_subtopic({ level, subject, topic: topicName, moduleTitle, difficulty, count, topicDetail, curriculumChunks: chunks, now }),
-      topic:       topicName,
-      moduleTitle,
-    };
-  }
-
-  if (scope === 'general_topic') {
-    const allRows    = await curriculumDB.getTopicsForExam(curriculum, level, subject, period || null, null);
-    const moduleRows = allRows.filter(r => slugify(r.module_title || '') === scopeRef);
-
-    let moduleTitle, topics;
-    if (moduleRows.length) {
-      moduleTitle = moduleRows[0].module_title;
-      topics      = moduleRows.map(r => r.topic);
-    } else {
-      // Fallback: humanize the scope_ref when no exact curriculum match found
-      moduleTitle = scopeRef.replace(/_/g, ' ');
-      topics      = [moduleTitle];
-      console.warn(`[qbGen] No rows for general_topic scope_ref: ${scopeRef} — using humanized fallback`);
-    }
-
-    const chunks = await getRAGChunks(curriculum, level, subject, period, moduleTitle);
-
-    return {
-      prompt:      prompts.question_bank_general_topic({ level, subject, moduleTitle, topics, difficulty, count, curriculumChunks: chunks, now }),
-      topic:       null,
-      moduleTitle,
-    };
-  }
-
-  if (scope === 'period') {
-    const allRows = await curriculumDB.getTopicsForExam(curriculum, level, subject, period || null, null);
-    if (!allRows.length) throw new Error(`No curriculum rows for ${level}/${period}/${subject}`);
-
-    const allTopics = allRows.map(r => ({ topic: r.topic, moduleTitle: r.module_title || '' }));
-    const chunks    = await getRAGChunks(curriculum, level, subject, period, null);
-
-    return {
-      prompt:      prompts.question_bank_period({ level, period, subject, allTopics, difficulty, count, curriculumChunks: chunks, now }),
-      topic:       null,
-      moduleTitle: null,
-    };
-  }
-
-  throw new Error(`Unknown scope: ${scope}`);
-}
-
-// ── Response parsing + validation ─────────────────────────────────────────────
+// ── Response parsing ──────────────────────────────────────────────────────────
 
 function parseResponse(raw) {
   let text = raw.trim().replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
@@ -148,146 +67,143 @@ function isValidQuestion(q) {
 }
 
 // ── Main generation function ──────────────────────────────────────────────────
+// Generates `count` questions for one slot: (curriculum, level, period, subject,
+// module_number, difficulty). Upserts into question_bank, skipping duplicates
+// by fingerprint.
 
 async function generateQuestions({
-  curriculum = 'tt_primary',
+  curriculum    = 'tt_primary',
   level,
   period,
   subject,
-  scope,
-  scopeRef,
+  module_number,
   difficulty,
-  count = TARGET_COUNT,
-  jobId = null,
+  count         = TARGET_COUNT,
 }) {
   const supabase = getSupabase();
 
-  if (jobId) {
-    await supabase.from('question_bank_queue').update({ status: 'processing' }).eq('id', jobId);
-  }
+  // Resolve module info from curriculum_topics
+  const allRows    = await curriculumDB.getTopicsForExam(curriculum, level, subject, period || null, null);
+  const moduleRows = allRows.filter(r => r.module_number === module_number);
 
-  try {
-    const { prompt, topic, moduleTitle } = await buildPrompt(
-      curriculum, level, period, subject, scope, scopeRef, difficulty, count
+  if (!moduleRows.length) {
+    throw new Error(
+      `No curriculum topics found for module_number ${module_number} (${level}/${period || 'cap'}/${subject})`
     );
-
-    const raw       = await generateContent(prompt, { maxTokens: 4000 });
-    const questions = parseResponse(raw);
-    const valid     = questions.filter(isValidQuestion);
-
-    if (!valid.length) {
-      throw new Error(`No valid questions in response (received ${questions.length} total)`);
-    }
-
-    const rows = valid.map(q => ({
-      question_id:    q.question_id && /^qb-[a-f0-9]{8}$/.test(q.question_id)
-                        ? q.question_id
-                        : makeQuestionId(),
-      curriculum,
-      level,
-      period:          period || null,
-      subject,
-      scope,
-      scope_ref:       scopeRef,
-      topic:           q.topic    || topic       || null,
-      module_title:    q.module_title || moduleTitle || null,
-      difficulty,
-      question:        q.question,
-      options:         q.options,
-      correct_answer:  q.correct_answer,
-      explanation:     q.explanation     || null,
-      tip:             q.tip             || null,
-      cognitive_level: q.cognitive_level || null,
-      source:          'generated',
-    }));
-
-    const { data: inserted, error } = await supabase
-      .from('question_bank')
-      .upsert(rows, { onConflict: 'question_id', ignoreDuplicates: true })
-      .select('id');
-
-    if (error) throw new Error(`DB insert failed: ${error.message}`);
-
-    const insertedCount = inserted?.length ?? rows.length;
-    console.log(`[qbGen] ${insertedCount} questions inserted — ${curriculum}/${level}/${period || 'cap'}/${subject}/${scope}/${scopeRef}/${difficulty}`);
-
-    if (jobId) {
-      await supabase.from('question_bank_queue').update({
-        status:       'done',
-        completed_at: new Date().toISOString(),
-      }).eq('id', jobId);
-    }
-
-    return { inserted: insertedCount, valid: valid.length, total: questions.length };
-
-  } catch (err) {
-    console.error('[qbGen] Generation failed:', err.message);
-
-    if (jobId) {
-      await supabase.from('question_bank_queue').update({
-        status:        'failed',
-        error_message: err.message,
-        completed_at:  new Date().toISOString(),
-      }).eq('id', jobId);
-    }
-
-    throw err;
   }
+
+  const moduleTitle = moduleRows[0].module_title || `Module ${module_number}`;
+  const subtopics   = moduleRows.map(r => r.topic);
+  const chunks      = await getRAGChunks(curriculum, level, subject, period, moduleTitle);
+
+  const prompts = PROMPTS[curriculum];
+  if (!prompts?.question_bank_module) {
+    throw new Error(`No question_bank_module prompt defined for curriculum: ${curriculum}`);
+  }
+
+  const prompt = prompts.question_bank_module({
+    level,
+    period,
+    subject,
+    module_number,
+    moduleTitle,
+    subtopics,
+    difficulty,
+    count,
+    curriculumChunks: chunks,
+    now: new Date().toISOString(),
+  });
+
+  const raw       = await generateContent(prompt, { maxTokens: 4000 });
+  const questions = parseResponse(raw);
+  const valid     = questions.filter(isValidQuestion);
+
+  if (!valid.length) {
+    throw new Error(`No valid questions in AI response (received ${questions.length} total)`);
+  }
+
+  const rows = valid.map(q => ({
+    curriculum,
+    level,
+    period:          period || null,
+    subject,
+    module_number,
+    module_title:    moduleTitle,
+    topic:           q.topic || subtopics[0] || moduleTitle,
+    question:        q.question,
+    options:         q.options,
+    correct_answer:  q.correct_answer,
+    explanation:     q.explanation  || null,
+    tip:             q.tip          || null,
+    cognitive_level: q.cognitive_level || null,
+    difficulty,
+    fingerprint:     makeFingerprint(q.question, q.options),
+    status:          'active',
+  }));
+
+  const { data: inserted, error } = await supabase
+    .from('question_bank')
+    .upsert(rows, { onConflict: 'fingerprint', ignoreDuplicates: true })
+    .select('id');
+
+  if (error) throw new Error(`DB insert failed: ${error.message}`);
+
+  const insertedCount    = inserted?.length ?? 0;
+  const duplicateSkipped = rows.length - insertedCount;
+
+  console.log(
+    `[qbGen] ${insertedCount} inserted, ${duplicateSkipped} duplicates skipped` +
+    ` — ${curriculum}/${level}/${period || 'cap'}/${subject}/module_${module_number}/${difficulty}`
+  );
+
+  return {
+    slot:             `${level}/${period || 'cap'}/${subject}/module_${module_number}/${difficulty}`,
+    generated:        valid.length,
+    inserted:         insertedCount,
+    duplicate_skipped: duplicateSkipped,
+  };
 }
 
-// ── Replenishment check ────────────────────────────────────────────────────────
+// ── Replenishment check ───────────────────────────────────────────────────────
+// Called async after /trial/assemble. If the slot's active count has dropped
+// below LOW_WATERMARK, triggers a background generateQuestions call.
 
-async function checkAndReplenish({ curriculum = 'tt_primary', level, period, subject, scope, scopeRef, difficulty }) {
+async function checkAndReplenish({ curriculum = 'tt_primary', level, period, subject, module_number, difficulty }) {
   const supabase = getSupabase();
 
-  const { count: available } = await supabase
+  let q = supabase
     .from('question_bank')
     .select('*', { count: 'exact', head: true })
     .eq('curriculum', curriculum)
     .eq('level', level)
     .eq('subject', subject)
-    .eq('scope', scope)
-    .eq('scope_ref', scopeRef)
+    .eq('module_number', module_number)
     .eq('difficulty', difficulty)
-    .eq('status', 'active')
-    .eq('used_count', 0);
+    .eq('status', 'active');
+
+  if (period) q = q.eq('period', period);
+  else        q = q.is('period', null);
+
+  const { count: available } = await q;
 
   if ((available ?? 0) >= LOW_WATERMARK) {
     return { needed: false, available: available ?? 0 };
   }
 
   const needed = TARGET_COUNT - (available ?? 0);
-  console.log(`[qbGen] Low pool (${available ?? 0} unused) for ${scope}/${scopeRef}/${difficulty} — queuing ${needed}`);
+  console.log(
+    `[qbGen] Low pool (${available ?? 0} active) for module_${module_number}/${difficulty} — replenishing ${needed}`
+  );
 
-  // Avoid duplicate pending jobs
-  const { data: existing } = await supabase
-    .from('question_bank_queue')
-    .select('id')
-    .eq('curriculum', curriculum)
-    .eq('level', level)
-    .eq('subject', subject)
-    .eq('scope', scope)
-    .eq('scope_ref', scopeRef)
-    .eq('difficulty', difficulty)
-    .eq('status', 'pending')
-    .limit(1);
-
-  if (existing?.length) {
-    return { needed: true, available: available ?? 0, queued: false, reason: 'already_queued' };
-  }
-
-  await supabase.from('question_bank_queue').insert({
-    curriculum,
-    level,
-    period:       period || null,
-    subject,
-    scope,
-    scope_ref:    scopeRef,
-    difficulty,
-    target_count: needed,
+  setImmediate(async () => {
+    try {
+      await generateQuestions({ curriculum, level, period, subject, module_number, difficulty, count: needed });
+    } catch (err) {
+      console.error('[qbGen] Async replenishment failed:', err.message);
+    }
   });
 
-  return { needed: true, available: available ?? 0, queued: true, target: needed };
+  return { needed: true, available: available ?? 0, target: needed };
 }
 
-module.exports = { generateQuestions, checkAndReplenish, slugify, buildScopeRef };
+module.exports = { generateQuestions, checkAndReplenish };
