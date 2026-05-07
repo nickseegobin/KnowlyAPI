@@ -162,8 +162,20 @@ async function generateQuestions({
   const insertedCount    = inserted?.length ?? 0;
   const duplicateSkipped = rows.length - insertedCount;
 
+  // Count active questions in this slot after insert
+  const { count: totalActive } = await supabase
+    .from('question_bank')
+    .select('id', { count: 'exact', head: true })
+    .eq('curriculum', curriculum)
+    .eq('level', level)
+    .eq('subject', subject)
+    .eq('module_number', module_number)
+    .eq('difficulty', difficulty)
+    .eq('status', 'active')
+    .then(r => ({ count: r.count ?? null, error: r.error }));
+
   console.log(
-    `[qbGen] ${insertedCount} inserted, ${duplicateSkipped} duplicates skipped` +
+    `[qbGen] ${insertedCount} inserted, ${duplicateSkipped} duplicates skipped, ${totalActive ?? '?'} total active` +
     ` — ${curriculum}/${level}/${period || 'cap'}/${subject}/module_${module_number}/${difficulty}`
   );
 
@@ -172,6 +184,7 @@ async function generateQuestions({
     generated:        valid.length,
     inserted:         insertedCount,
     duplicate_skipped: duplicateSkipped,
+    total:            totalActive,
   };
 }
 
