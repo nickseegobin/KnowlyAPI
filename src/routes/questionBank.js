@@ -27,15 +27,26 @@ router.get('/list', requireServerKey, async (req, res) => {
 
   const supabase = getSupabase();
 
-  // Get all subtopics for this scope to derive the module list
-  const allRows = await curriculumDB
-    .getTopicsForExam(curriculum, level, subject, period || null, null)
-    .catch(() => []);
+  // Query curriculum_topics directly — getTopicsForExam omits module_number
+  let moduleQuery = supabase
+    .from('curriculum_topics')
+    .select('module_number, module_title, sort_order')
+    .eq('curriculum', curriculum)
+    .eq('level', level)
+    .eq('subject', subject)
+    .eq('status', 'active')
+    .not('module_number', 'is', null)
+    .order('sort_order', { ascending: true });
+
+  if (period) moduleQuery = moduleQuery.eq('period', period);
+  else        moduleQuery = moduleQuery.is('period', null);
+
+  const { data: topicRows, error: topicErr } = await moduleQuery;
+  if (topicErr) return res.status(500).json({ error: topicErr.message });
 
   // Deduplicate to one entry per module_number
   const moduleMap = new Map();
-  for (const row of allRows) {
-    if (row.module_number == null) continue;
+  for (const row of topicRows || []) {
     if (!moduleMap.has(row.module_number)) {
       moduleMap.set(row.module_number, {
         module_number: row.module_number,

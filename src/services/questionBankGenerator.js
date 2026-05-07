@@ -82,11 +82,22 @@ async function generateQuestions({
 }) {
   const supabase = getSupabase();
 
-  // Resolve module info from curriculum_topics
-  const allRows    = await curriculumDB.getTopicsForExam(curriculum, level, subject, period || null, null);
-  const moduleRows = allRows.filter(r => r.module_number === module_number);
+  // Query curriculum_topics directly for this module's subtopics — getTopicsForExam omits module_number
+  let moduleQuery = supabase
+    .from('curriculum_topics')
+    .select('module_number, module_title, topic')
+    .eq('curriculum', curriculum)
+    .eq('level', level)
+    .eq('subject', subject)
+    .eq('module_number', module_number)
+    .eq('status', 'active');
 
-  if (!moduleRows.length) {
+  moduleQuery = period ? moduleQuery.eq('period', period) : moduleQuery.is('period', null);
+
+  const { data: moduleRows, error: moduleErr } = await moduleQuery;
+  if (moduleErr) throw new Error(`curriculum_topics query failed: ${moduleErr.message}`);
+
+  if (!moduleRows?.length) {
     throw new Error(
       `No curriculum topics found for module_number ${module_number} (${level}/${period || 'cap'}/${subject})`
     );
