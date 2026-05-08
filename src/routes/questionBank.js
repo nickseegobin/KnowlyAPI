@@ -210,6 +210,7 @@ router.get('/questions', requireServerKey, async (req, res) => {
   query = query
     .order('module_number', { ascending: true })
     .order('times_served',  { ascending: true })
+    .order('id',            { ascending: true })
     .range(offset, offset + perPageNum - 1);
 
   const { data, error, count } = await query;
