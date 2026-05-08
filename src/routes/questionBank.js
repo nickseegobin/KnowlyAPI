@@ -163,4 +163,99 @@ router.post('/generate', requireServerKey, async (req, res) => {
   });
 });
 
+// ── GET /api/v1/question-bank/questions ──────────────────────────────────────
+// Browse questions with optional filters. Returns paginated results.
+//
+// Query params: curriculum, level, period, subject, module_number, difficulty,
+//               status (active|retired|pending_review|all), page, per_page
+router.get('/questions', requireServerKey, async (req, res) => {
+  const {
+    curriculum    = 'tt_primary',
+    level,
+    subject,
+    period,
+    module_number,
+    difficulty,
+    status        = 'active',
+    page          = 1,
+    per_page      = 25,
+  } = req.query;
+
+  if (!level || !subject) {
+    return res.status(400).json({ error: 'level and subject are required', code: 'missing_fields' });
+  }
+
+  const supabase   = getSupabase();
+  const pageNum    = Math.max(1, parseInt(page, 10) || 1);
+  const perPageNum = Math.min(100, Math.max(1, parseInt(per_page, 10) || 25));
+  const offset     = (pageNum - 1) * perPageNum;
+
+  let query = supabase
+    .from('question_bank')
+    .select(
+      'id, module_number, module_title, topic, question, options, correct_answer, ' +
+      'difficulty, cognitive_level, times_served, last_served_at, status, created_at',
+      { count: 'exact' }
+    )
+    .eq('curriculum', curriculum)
+    .eq('level', level)
+    .eq('subject', subject);
+
+  if (period)                         query = query.eq('period', period);
+  else                                query = query.is('period', null);
+  if (module_number != null)          query = query.eq('module_number', parseInt(module_number, 10));
+  if (difficulty)                     query = query.eq('difficulty', difficulty);
+  if (status && status !== 'all')     query = query.eq('status', status);
+
+  query = query
+    .order('module_number', { ascending: true })
+    .order('times_served',  { ascending: true })
+    .range(offset, offset + perPageNum - 1);
+
+  const { data, error, count } = await query;
+  if (error) return res.status(500).json({ error: error.message });
+
+  return res.json({
+    questions: data || [],
+    total:     count ?? 0,
+    page:      pageNum,
+    per_page:  perPageNum,
+    pages:     Math.max(1, Math.ceil((count ?? 0) / perPageNum)),
+  });
+});
+
+// ── PATCH /api/v1/question-bank/questions/:id ─────────────────────────────────
+// Update a single question's status.
+//
+// Body: { status: 'active' | 'retired' | 'pending_review' }
+router.patch('/questions/:id', requireServerKey, async (req, res) => {
+  const { id }     = req.params;
+  const { status } = req.body;
+
+  if (!id) {
+    return res.status(400).json({ error: 'id is required', code: 'missing_id' });
+  }
+
+  const allowed = ['active', 'retired', 'pending_review'];
+  if (!allowed.includes(status)) {
+    return res.status(400).json({
+      error: `status must be one of: ${allowed.join(', ')}`,
+      code:  'invalid_status',
+    });
+  }
+
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from('question_bank')
+    .update({ status })
+    .eq('id', id)
+    .select('id, question, status, module_number, difficulty, times_served')
+    .single();
+
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data)  return res.status(404).json({ error: 'Question not found', code: 'not_found' });
+
+  return res.json({ updated: true, question: data });
+});
+
 module.exports = router;
