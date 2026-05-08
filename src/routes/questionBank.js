@@ -194,7 +194,7 @@ router.get('/questions', requireServerKey, async (req, res) => {
     .from('question_bank')
     .select(
       'id, module_number, module_title, topic, question, options, correct_answer, ' +
-      'difficulty, cognitive_level, times_served, last_served_at, status, created_at',
+      'difficulty, cognitive_level, times_served, last_served_at, status',
       { count: 'exact' }
     )
     .eq('curriculum', curriculum)
@@ -252,8 +252,12 @@ router.patch('/questions/:id', requireServerKey, async (req, res) => {
     .select('id, question, status, module_number, difficulty, times_served')
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
-  if (!data)  return res.status(404).json({ error: 'Question not found', code: 'not_found' });
+  if (error) {
+    if (error.code === 'PGRST116') {
+      return res.status(404).json({ error: 'Question not found', code: 'not_found' });
+    }
+    return res.status(500).json({ error: error.message });
+  }
 
   return res.json({ updated: true, question: data });
 });
