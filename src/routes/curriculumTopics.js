@@ -172,6 +172,114 @@ router.delete('/:id', requireServerKey, async (req, res) => {
   }
 });
 
+// ── POST /api/v1/curriculum-topics/import ────────────────────────────────────
+// Bulk-upsert curriculum topics for a (curriculum × level × period × subject) scope.
+// Matches on topic string. Archives existing rows in scope NOT present in the new set.
+// Syncs all upserted rows to Pinecone (ct-* vectors).
+//
+// Body: { curriculum, level, period, subject,
+//         rows: [{ module_number, module_title, topic, sort_order }] }
+router.post('/import', requireServerKey, async (req, res) => {
+  const { curriculum = 'tt_primary', level, period = null, subject, rows = [] } = req.body;
+
+  if (!level || !subject) {
+    return res.status(400).json({ error: 'level and subject are required', code: 'missing_fields' });
+  }
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return res.status(400).json({ error: 'rows must be a non-empty array', code: 'missing_fields' });
+  }
+
+  const supabase = getSupabase();
+
+  // Fetch existing active rows for this scope
+  let existingQuery = supabase
+    .from('curriculum_topics')
+    .select('id, topic, module_number, module_title, sort_order, status')
+    .eq('curriculum', curriculum)
+    .eq('level', level)
+    .eq('subject', subject)
+    .eq('status', 'active');
+
+  if (period) existingQuery = existingQuery.eq('period', period);
+  else        existingQuery = existingQuery.is('period', null);
+
+  const { data: existing, error: fetchErr } = await existingQuery;
+  if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+
+  const existingByTopic = new Map((existing || []).map(r => [r.topic.toLowerCase().trim(), r]));
+  const newTopicKeys    = new Set(rows.map(r => (r.topic || '').toLowerCase().trim()));
+
+  let created = 0, updated = 0, archived = 0;
+  const savedRows = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    const { module_number, module_title, topic, sort_order } = rows[i];
+    if (!topic || !topic.trim()) continue;
+
+    const key        = topic.toLowerCase().trim();
+    const existing_r = existingByTopic.get(key);
+
+    const rowData = {
+      curriculum,
+      level,
+      period:        period || null,
+      subject,
+      module_number: module_number != null ? parseInt(module_number, 10) : null,
+      module_title:  module_title  || null,
+      topic:         topic.trim(),
+      sort_order:    sort_order    != null ? parseInt(sort_order, 10) : i,
+      source:        'csv',
+      status:        'active',
+    };
+
+    if (existing_r) {
+      const { data, error } = await supabase
+        .from('curriculum_topics')
+        .update({
+          module_number: rowData.module_number,
+          module_title:  rowData.module_title,
+          sort_order:    rowData.sort_order,
+          source:        'csv',
+          status:        'active',
+        })
+        .eq('id', existing_r.id)
+        .select()
+        .single();
+      if (!error && data) { savedRows.push(data); updated++; }
+      else if (error) console.error(`[curriculum-topics/import] update failed id=${existing_r.id}:`, error.message);
+    } else {
+      const { data, error } = await supabase
+        .from('curriculum_topics')
+        .insert(rowData)
+        .select()
+        .single();
+      if (!error && data) { savedRows.push(data); created++; }
+      else if (error) console.error(`[curriculum-topics/import] insert failed "${topic}":`, error.message);
+    }
+  }
+
+  // Archive rows in this scope NOT present in the new set
+  for (const [topicKey, row] of existingByTopic) {
+    if (!newTopicKeys.has(topicKey)) {
+      await supabase.from('curriculum_topics').update({ status: 'archived' }).eq('id', row.id);
+      fireRemoveTopic(row.id);
+      archived++;
+    }
+  }
+
+  // Sync all upserted rows to Pinecone (ct-* vectors)
+  const syncResult = await bulkSyncTopics(savedRows);
+
+  return res.json({
+    created,
+    updated,
+    archived,
+    synced_to_pinecone: syncResult.synced,
+    pinecone_failed:    syncResult.failed,
+    total:              rows.length,
+  });
+});
+
 // ── POST /api/v1/curriculum-topics/sync ──────────────────────────────────────
 // Bulk-upsert all active curriculum topics into Pinecone.
 // Optional body: { curriculum, level, period, subject } to scope the backfill.
