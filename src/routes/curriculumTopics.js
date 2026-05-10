@@ -185,8 +185,8 @@ router.post('/import', requireServerKey, async (req, res) => {
   if (!level || !subject) {
     return res.status(400).json({ error: 'level and subject are required', code: 'missing_fields' });
   }
-  if (!Array.isArray(rows) || rows.length === 0) {
-    return res.status(400).json({ error: 'rows must be a non-empty array', code: 'missing_fields' });
+  if (!Array.isArray(rows)) {
+    return res.status(400).json({ error: 'rows must be an array', code: 'missing_fields' });
   }
 
   const supabase = getSupabase();
