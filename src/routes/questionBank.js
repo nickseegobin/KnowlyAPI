@@ -263,4 +263,25 @@ router.patch('/questions/:id', requireServerKey, async (req, res) => {
   return res.json({ updated: true, question: data });
 });
 
+// ── DELETE /api/v1/question-bank/purge ───────────────────────────────────────
+// Retires ALL active questions in question_bank. Irreversible.
+router.delete('/purge', requireServerKey, async (req, res) => {
+  try {
+    const { error, count } = await getSupabase()
+      .from('question_bank')
+      .update({ status: 'retired' })
+      .in('status', ['active', 'pending_review'])
+      .select('id', { count: 'exact', head: true });
+
+    if (error) throw error;
+
+    console.log(`[question-bank/purge] Retired ${count ?? '?'} questions`);
+    return res.json({ retired: count ?? 0 });
+
+  } catch (err) {
+    console.error('[question-bank/purge] Error:', err.message);
+    return res.status(500).json({ error: 'Purge failed', code: 'server_error', details: err.message });
+  }
+});
+
 module.exports = router;

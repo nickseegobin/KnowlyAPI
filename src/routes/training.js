@@ -233,4 +233,32 @@ router.post('/import', requireServerKey, async (req, res) => {
   return res.json({ synced, failed, total: rows.length, errors });
 });
 
+// ── DELETE /api/v1/training/purge ─────────────────────────────────────────────
+// Deletes ALL tm-* vectors from Pinecone. Irreversible.
+router.delete('/purge', requireServerKey, async (req, res) => {
+  try {
+    const index  = getIndex();
+    const allIds = [];
+    let token;
+
+    do {
+      const result = await index.listPaginated({ prefix: 'tm-', limit: 100, ...(token ? { paginationToken: token } : {}) });
+      (result.vectors || []).forEach(v => allIds.push(v.id));
+      token = result.pagination?.next;
+    } while (token);
+
+    // Batch delete in chunks of 100
+    for (let i = 0; i < allIds.length; i += 100) {
+      await index.deleteMany(allIds.slice(i, i + 100));
+    }
+
+    console.log(`[training/purge] Deleted ${allIds.length} tm-* vectors from Pinecone`);
+    return res.json({ deleted: allIds.length, prefix: 'tm-' });
+
+  } catch (err) {
+    console.error('[training/purge] Error:', err.message);
+    return res.status(500).json({ error: 'Purge failed', code: 'server_error', details: err.message });
+  }
+});
+
 module.exports = router;

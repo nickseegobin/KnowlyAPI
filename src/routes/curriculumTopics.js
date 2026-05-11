@@ -321,4 +321,44 @@ router.post('/sync', requireServerKey, async (req, res) => {
   }
 });
 
+// ── DELETE /api/v1/curriculum-topics/purge ────────────────────────────────────
+// Archives ALL curriculum_topics rows in Supabase and deletes ALL ct-* vectors
+// from Pinecone. Irreversible.
+router.delete('/purge', requireServerKey, async (req, res) => {
+  const { getIndex } = require('../services/pinecone');
+
+  try {
+    // 1. Archive all curriculum_topics in Supabase
+    const { error: sbErr, count } = await getSupabase()
+      .from('curriculum_topics')
+      .update({ status: 'archived' })
+      .eq('status', 'active')
+      .select('id', { count: 'exact', head: true });
+
+    if (sbErr) throw sbErr;
+
+    // 2. Delete all ct-* vectors from Pinecone
+    const index  = getIndex();
+    const allIds = [];
+    let token;
+
+    do {
+      const result = await index.listPaginated({ prefix: 'ct-', limit: 100, ...(token ? { paginationToken: token } : {}) });
+      (result.vectors || []).forEach(v => allIds.push(v.id));
+      token = result.pagination?.next;
+    } while (token);
+
+    for (let i = 0; i < allIds.length; i += 100) {
+      await index.deleteMany(allIds.slice(i, i + 100));
+    }
+
+    console.log(`[curriculum-topics/purge] Archived ${count ?? '?'} rows, deleted ${allIds.length} ct-* vectors`);
+    return res.json({ archived_rows: count ?? 0, deleted_vectors: allIds.length });
+
+  } catch (err) {
+    console.error('[curriculum-topics/purge] Error:', err.message);
+    return res.status(500).json({ error: 'Purge failed', code: 'server_error', details: err.message });
+  }
+});
+
 module.exports = router;
