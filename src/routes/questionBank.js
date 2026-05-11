@@ -236,7 +236,7 @@ router.get('/questions', requireServerKey, async (req, res) => {
     .from('question_bank')
     .select(
       'id, module_number, module_title, topic, question, options, correct_answer, ' +
-      'difficulty, cognitive_level, times_served, last_served_at, status',
+      'difficulty, explanation, tip, cognitive_level, times_served, last_served_at, status',
       { count: 'exact' }
     )
     .eq('curriculum', curriculum)
