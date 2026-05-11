@@ -372,12 +372,17 @@ router.get('/list', requireServerKey, async (req, res) => {
 });
 
 // ── PATCH /api/v1/trial-packs/:id ────────────────────────────────────────────
-// Update pack status (e.g. archived).
+// Update pack status. Optionally release the pack's questions back to the
+// unassigned pool when archiving.
 //
-// Body: { status: 'active' | 'archived' }
+// Body: { status: 'active' | 'archived', release_questions?: boolean }
+//
+// release_questions=true is only honoured when status='archived'.
+// It NULLs assigned_pack_id on every question in the pack, making them
+// available again for new pack builds.
 router.patch('/:id', requireServerKey, async (req, res) => {
-  const { id }     = req.params;
-  const { status } = req.body;
+  const { id }                          = req.params;
+  const { status, release_questions = false } = req.body;
 
   const allowed = ['active', 'archived'];
   if (!allowed.includes(status)) {
@@ -385,19 +390,49 @@ router.patch('/:id', requireServerKey, async (req, res) => {
   }
 
   const supabase = getSupabase();
-  const { data, error } = await supabase
+
+  // Fetch pack first so we have question_ids for the optional release step
+  const { data: pack, error: fetchErr } = await supabase
+    .from('trial_packs')
+    .select('id, status, question_ids')
+    .eq('id', id)
+    .single();
+
+  if (fetchErr || !pack) return res.status(404).json({ error: 'Pack not found', code: 'not_found' });
+
+  // Update pack status
+  const { data: updated, error: updateErr } = await supabase
     .from('trial_packs')
     .update({ status })
     .eq('id', id)
-    .select('id, status')
+    .select('id, status, question_ids')
     .single();
 
-  if (error) {
-    if (error.code === 'PGRST116') return res.status(404).json({ error: 'Pack not found', code: 'not_found' });
-    return res.status(500).json({ error: error.message });
+  if (updateErr) return res.status(500).json({ error: updateErr.message });
+
+  // Optionally release questions back to the unassigned pool
+  let released = 0;
+  if (status === 'archived' && release_questions && (pack.question_ids || []).length > 0) {
+    const { error: releaseErr, count } = await supabase
+      .from('question_bank')
+      .update({ assigned_pack_id: null })
+      .in('id', pack.question_ids);
+
+    if (releaseErr) {
+      // Pack was archived successfully; log the release failure but don't roll back
+      console.error(`[trial-packs/archive] Release failed for pack ${id}:`, releaseErr.message);
+      return res.status(207).json({
+        updated:  true,
+        pack:     updated,
+        warning:  'Pack archived but question release failed — questions remain locked to this pack.',
+        released: 0,
+      });
+    }
+    released = pack.question_ids.length;
+    console.log(`[trial-packs/archive] Pack ${id} archived; ${released} questions released to pool.`);
   }
 
-  return res.json({ updated: true, pack: data });
+  return res.json({ updated: true, pack: updated, released });
 });
 
 // ── GET /api/v1/trial-packs/:id ──────────────────────────────────────────────
