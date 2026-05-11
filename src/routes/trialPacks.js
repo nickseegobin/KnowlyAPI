@@ -316,6 +316,35 @@ router.get('/list', requireServerKey, async (req, res) => {
   });
 });
 
+// ── PATCH /api/v1/trial-packs/:id ────────────────────────────────────────────
+// Update pack status (e.g. archived).
+//
+// Body: { status: 'active' | 'archived' }
+router.patch('/:id', requireServerKey, async (req, res) => {
+  const { id }     = req.params;
+  const { status } = req.body;
+
+  const allowed = ['active', 'archived'];
+  if (!allowed.includes(status)) {
+    return res.status(400).json({ error: `status must be one of: ${allowed.join(', ')}`, code: 'invalid_status' });
+  }
+
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from('trial_packs')
+    .update({ status })
+    .eq('id', id)
+    .select('id, status')
+    .single();
+
+  if (error) {
+    if (error.code === 'PGRST116') return res.status(404).json({ error: 'Pack not found', code: 'not_found' });
+    return res.status(500).json({ error: error.message });
+  }
+
+  return res.json({ updated: true, pack: data });
+});
+
 // ── GET /api/v1/trial-packs/:id ──────────────────────────────────────────────
 // Get a single pack with all its questions (admin preview).
 router.get('/:id', requireServerKey, async (req, res) => {

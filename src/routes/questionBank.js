@@ -226,31 +226,80 @@ router.get('/questions', requireServerKey, async (req, res) => {
 });
 
 // ── PATCH /api/v1/question-bank/questions/:id ─────────────────────────────────
-// Update a single question's status.
+// Update one question. Accepts any combination of editable fields plus status.
 //
-// Body: { status: 'active' | 'retired' | 'pending_review' }
+// Body (all optional, at least one required):
+//   status       : 'active' | 'retired' | 'pending_review'
+//   question     : string
+//   options      : { A, B, C, D }
+//   correct_answer: 'A' | 'B' | 'C' | 'D'
+//   difficulty   : 'easy' | 'medium' | 'hard'
+//   explanation  : string
+//   tip          : string
+//   topic        : string
 router.patch('/questions/:id', requireServerKey, async (req, res) => {
-  const { id }     = req.params;
-  const { status } = req.body;
-
+  const { id } = req.params;
   if (!id) {
     return res.status(400).json({ error: 'id is required', code: 'missing_id' });
   }
 
-  const allowed = ['active', 'retired', 'pending_review'];
-  if (!allowed.includes(status)) {
-    return res.status(400).json({
-      error: `status must be one of: ${allowed.join(', ')}`,
-      code:  'invalid_status',
-    });
+  const {
+    status, question, options, correct_answer,
+    difficulty, explanation, tip, topic,
+  } = req.body;
+
+  const patch = {};
+
+  if (status !== undefined) {
+    const allowed = ['active', 'retired', 'pending_review'];
+    if (!allowed.includes(status)) {
+      return res.status(400).json({ error: `status must be one of: ${allowed.join(', ')}`, code: 'invalid_status' });
+    }
+    patch.status = status;
+  }
+
+  if (question !== undefined) {
+    if (typeof question !== 'string' || !question.trim()) {
+      return res.status(400).json({ error: 'question must be a non-empty string', code: 'invalid_question' });
+    }
+    patch.question = question.trim();
+  }
+
+  if (options !== undefined) {
+    if (typeof options !== 'object' || !['A','B','C','D'].every(k => typeof options[k] === 'string')) {
+      return res.status(400).json({ error: 'options must be an object with string keys A, B, C, D', code: 'invalid_options' });
+    }
+    patch.options = { A: options.A, B: options.B, C: options.C, D: options.D };
+  }
+
+  if (correct_answer !== undefined) {
+    if (!['A','B','C','D'].includes(correct_answer)) {
+      return res.status(400).json({ error: 'correct_answer must be A, B, C, or D', code: 'invalid_correct_answer' });
+    }
+    patch.correct_answer = correct_answer;
+  }
+
+  if (difficulty !== undefined) {
+    if (!['easy','medium','hard'].includes(difficulty)) {
+      return res.status(400).json({ error: 'difficulty must be easy, medium, or hard', code: 'invalid_difficulty' });
+    }
+    patch.difficulty = difficulty;
+  }
+
+  if (explanation !== undefined) patch.explanation = String(explanation).trim();
+  if (tip         !== undefined) patch.tip         = String(tip).trim();
+  if (topic       !== undefined) patch.topic       = String(topic).trim();
+
+  if (Object.keys(patch).length === 0) {
+    return res.status(400).json({ error: 'No valid fields provided to update', code: 'no_fields' });
   }
 
   const supabase = getSupabase();
   const { data, error } = await supabase
     .from('question_bank')
-    .update({ status })
+    .update(patch)
     .eq('id', id)
-    .select('id, question, status, module_number, difficulty, times_served')
+    .select('id, question, options, correct_answer, difficulty, explanation, tip, topic, status, module_number, times_served')
     .single();
 
   if (error) {
