@@ -30,6 +30,7 @@ const curriculumTopicsRouter   = require('./routes/curriculumTopics');
 const questionBankRouter       = require('./routes/questionBank');
 const trialStartRouter         = require('./routes/trialStart');
 const progressionRouter        = require('./routes/progression');
+const trialPacksRouter         = require('./routes/trialPacks');
 
 
 
@@ -56,6 +57,7 @@ app.use('/api/v1/curriculum-topics', curriculumTopicsRouter);
 app.use('/api/v1/question-bank',     questionBankRouter);
 app.use('/api/v1/trial',             trialStartRouter);
 app.use('/api/v1/progression',       progressionRouter);
+app.use('/api/v1/trial-packs',       trialPacksRouter);
 
 
 // 404 handler
