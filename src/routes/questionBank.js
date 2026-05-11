@@ -163,6 +163,48 @@ router.post('/generate', requireServerKey, async (req, res) => {
   });
 });
 
+// ── GET /api/v1/question-bank/modules ────────────────────────────────────────
+// Returns distinct modules (number + title) that have active questions for a
+// given curriculum/level/subject/period. Used to populate module dropdowns.
+//
+// Query: { curriculum, level, subject, period }
+router.get('/modules', requireServerKey, async (req, res) => {
+  const { curriculum = 'tt_primary', level, subject, period } = req.query;
+
+  if (!level || !subject) {
+    return res.status(400).json({ error: 'level and subject are required', code: 'missing_fields' });
+  }
+
+  const supabase = getSupabase();
+  let query = supabase
+    .from('question_bank')
+    .select('module_number, module_title')
+    .eq('curriculum', curriculum)
+    .eq('level', level)
+    .eq('subject', subject)
+    .eq('status', 'active')
+    .not('module_number', 'is', null);
+
+  if (period) query = query.eq('period', period);
+  else        query = query.is('period', null);
+
+  const { data, error } = await query;
+  if (error) return res.status(500).json({ error: error.message });
+
+  // Deduplicate and sort by module_number
+  const seen = new Map();
+  for (const row of data || []) {
+    if (!seen.has(row.module_number)) {
+      seen.set(row.module_number, row.module_title || `Module ${row.module_number}`);
+    }
+  }
+  const modules = [...seen.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([module_number, module_title]) => ({ module_number, module_title }));
+
+  return res.json({ modules });
+});
+
 // ── GET /api/v1/question-bank/questions ──────────────────────────────────────
 // Browse questions with optional filters. Returns paginated results.
 //

@@ -14,23 +14,14 @@ const requireServerKey = (req, res, next) => {
 
 const PACK_SIZE = { easy: 12, medium: 18, hard: 24 };
 
-// Returns the number of questions to draw from each pool for a given pack difficulty.
-// Easy:   90% easy  + 10% hard  (challenge sprinkle)
-// Medium: 75% easy|medium pool + 25% hard
-// Hard:   50% hard  + 50% easy|medium pool (randomly drawn together)
+// Explicit 3-pool split per pack difficulty.
+// Easy   (12): 9 easy  + 2 medium + 1 hard   — success-focused with a challenge taste
+// Medium (18): 4 easy  + 9 medium + 5 hard   — balanced core with hard ceiling
+// Hard   (24): 3 easy  + 9 medium + 12 hard  — mastery-focused, full spectrum
 function difficultyMix(packDifficulty) {
-  const total = PACK_SIZE[packDifficulty];
-  if (packDifficulty === 'easy') {
-    const hard = Math.round(total * 0.10);       // ~1
-    return { easy: total - hard, mixed: 0, hard };
-  }
-  if (packDifficulty === 'medium') {
-    const hard  = Math.round(total * 0.25);      // ~5
-    return { easy: 0, mixed: total - hard, hard };
-  }
-  // hard
-  const hard = Math.round(total * 0.50);         // 12
-  return { easy: 0, mixed: total - hard, hard };
+  if (packDifficulty === 'easy')   return { easy: 9,  medium: 2, hard: 1  };
+  if (packDifficulty === 'medium') return { easy: 4,  medium: 9, hard: 5  };
+  /* hard */                       return { easy: 3,  medium: 9, hard: 12 };
 }
 
 function shuffle(arr) {
@@ -104,37 +95,35 @@ router.post('/build', requireServerKey, async (req, res) => {
   const modNum   = module_number != null ? parseInt(module_number, 10) : null;
   const filters  = { curriculum, level, period: period || null, subject, module_number: modNum };
 
-  let selected;
+  let easyQs, mediumQs, hardQs;
   try {
-    if (difficulty === 'easy') {
-      // Easy pool + hard accent questions
-      const easyQs = await fetchUnassigned(supabase, filters, ['easy'], mix.easy);
-      const hardQs = await fetchUnassigned(supabase, filters, ['hard'], mix.hard);
-      selected = shuffle([...easyQs, ...hardQs]);
-    } else {
-      // Combined easy+medium pool + hard accent
-      const mixedQs = await fetchUnassigned(supabase, filters, ['easy', 'medium'], mix.mixed);
-      const hardQs  = await fetchUnassigned(supabase, filters, ['hard'],           mix.hard);
-      selected = shuffle([...mixedQs, ...hardQs]);
-    }
+    [easyQs, mediumQs, hardQs] = await Promise.all([
+      fetchUnassigned(supabase, filters, ['easy'],   mix.easy),
+      fetchUnassigned(supabase, filters, ['medium'], mix.medium),
+      fetchUnassigned(supabase, filters, ['hard'],   mix.hard),
+    ]);
   } catch (err) {
     console.error('[trial-packs/build] Query failed:', err.message);
     return res.status(500).json({ error: err.message, code: 'query_failed' });
   }
 
-  const target = PACK_SIZE[difficulty];
-  if (selected.length < target) {
+  // Report any pool that came up short so the admin knows exactly what to generate
+  const shortfalls = [
+    easyQs.length   < mix.easy   && { difficulty: 'easy',   need: mix.easy,   found: easyQs.length   },
+    mediumQs.length < mix.medium && { difficulty: 'medium', need: mix.medium, found: mediumQs.length },
+    hardQs.length   < mix.hard   && { difficulty: 'hard',   need: mix.hard,   found: hardQs.length   },
+  ].filter(Boolean);
+
+  if (shortfalls.length > 0) {
     return res.status(422).json({
-      error: `Insufficient unassigned questions: need ${target}, found ${selected.length}.`,
-      code:   'insufficient_questions',
-      found:  selected.length,
-      needed: target,
-      tip:    'Generate more questions for this slot first.',
+      error:      'Insufficient unassigned questions in one or more difficulty pools.',
+      code:       'insufficient_questions',
+      shortfalls,
+      tip:        'Generate more questions for the indicated difficulty slots first.',
     });
   }
 
-  // Trim to exact pack size
-  selected = selected.slice(0, target);
+  let selected = shuffle([...easyQs, ...mediumQs, ...hardQs]);
 
   if (preview) {
     return res.json({
@@ -197,6 +186,72 @@ router.post('/build', requireServerKey, async (req, res) => {
     module_numbers,
     question_count: selected.length,
     questions:      selected,
+  });
+});
+
+// ── POST /api/v1/trial-packs/dynamic-preview ─────────────────────────────────
+// Preview a multi-topic dynamic pack. Each selected module is randomly assigned
+// a difficulty; questions_per_module questions are drawn from that module's pool
+// at the assigned difficulty. Nothing is saved — preview only.
+//
+// Body: { curriculum, level, period, subject, modules: number[], questions_per_module }
+//
+// Response includes module_assignments showing which difficulty each module drew.
+router.post('/dynamic-preview', requireServerKey, async (req, res) => {
+  const {
+    curriculum           = 'tt_primary',
+    level,
+    period               = null,
+    subject,
+    modules              = [],
+    questions_per_module = 4,
+  } = req.body;
+
+  if (!level || !subject) {
+    return res.status(400).json({ error: 'level and subject are required', code: 'missing_fields' });
+  }
+  if (!Array.isArray(modules) || modules.length === 0) {
+    return res.status(400).json({ error: 'modules must be a non-empty array of module numbers', code: 'missing_modules' });
+  }
+  const qpm = Math.min(10, Math.max(1, parseInt(questions_per_module, 10) || 4));
+
+  const DIFFICULTIES = ['easy', 'medium', 'hard'];
+  const supabase     = getSupabase();
+
+  const allQuestions      = [];
+  const module_assignments = [];
+
+  for (const modNum of modules) {
+    // Randomly assign a difficulty to this module
+    const assignedDiff = DIFFICULTIES[Math.floor(Math.random() * DIFFICULTIES.length)];
+    const filters      = { curriculum, level, period: period || null, subject, module_number: parseInt(modNum, 10) };
+
+    let qs;
+    try {
+      qs = await fetchUnassigned(supabase, filters, [assignedDiff], qpm);
+      // Fallback: if randomly-assigned pool is empty, try any difficulty
+      if (qs.length === 0) {
+        qs = await fetchUnassigned(supabase, filters, DIFFICULTIES, qpm);
+      }
+    } catch (err) {
+      return res.status(500).json({ error: err.message, code: 'query_failed' });
+    }
+
+    module_assignments.push({
+      module_number:    parseInt(modNum, 10),
+      difficulty_drawn: assignedDiff,
+      questions_drawn:  qs.length,
+    });
+    allQuestions.push(...qs);
+  }
+
+  return res.json({
+    preview:             true,
+    dynamic:             true,
+    question_count:      allQuestions.length,
+    questions_per_module: qpm,
+    module_assignments,
+    questions:           shuffle(allQuestions),
   });
 });
 
