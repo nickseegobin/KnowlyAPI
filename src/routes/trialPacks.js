@@ -435,6 +435,46 @@ router.patch('/:id', requireServerKey, async (req, res) => {
   return res.json({ updated: true, pack: updated, released });
 });
 
+// ── DELETE /api/v1/trial-packs/:id ───────────────────────────────────────────
+// Disband a pack: releases all questions back to the unassigned pool, then
+// permanently deletes the pack row. Irreversible.
+router.delete('/:id', requireServerKey, async (req, res) => {
+  const { id }   = req.params;
+  const supabase = getSupabase();
+
+  const { data: pack, error: fetchErr } = await supabase
+    .from('trial_packs')
+    .select('id, question_ids')
+    .eq('id', id)
+    .single();
+
+  if (fetchErr || !pack) return res.status(404).json({ error: 'Pack not found', code: 'not_found' });
+
+  // Release questions first
+  const questionIds = pack.question_ids || [];
+  if (questionIds.length > 0) {
+    const { error: releaseErr } = await supabase
+      .from('question_bank')
+      .update({ assigned_pack_id: null })
+      .in('id', questionIds);
+
+    if (releaseErr) {
+      return res.status(500).json({ error: `Question release failed: ${releaseErr.message}`, code: 'release_failed' });
+    }
+  }
+
+  // Delete pack row
+  const { error: deleteErr } = await supabase
+    .from('trial_packs')
+    .delete()
+    .eq('id', id);
+
+  if (deleteErr) return res.status(500).json({ error: deleteErr.message, code: 'delete_failed' });
+
+  console.log(`[trial-packs/disband] Pack ${id} disbanded; ${questionIds.length} questions released.`);
+  return res.json({ disbanded: true, released: questionIds.length });
+});
+
 // ── GET /api/v1/trial-packs/:id ──────────────────────────────────────────────
 // Get a single pack with all its questions (admin preview).
 router.get('/:id', requireServerKey, async (req, res) => {
