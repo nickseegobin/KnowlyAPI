@@ -278,6 +278,124 @@ Permanently deletes the pack row and releases all locked questions back to the p
 
 ---
 
+## Sequential Trial Delivery (Phase 4)
+
+### Get next pack for a child
+
+```
+GET /trial/next-pack
+```
+
+**Auth:** Server key (`X-AEP-Server-Key`)
+
+**Query params:**
+
+| Param       | Required | Description                                    |
+|-------------|----------|------------------------------------------------|
+| child_id    | yes      | Integer WP user ID of the child                |
+| level       | yes      | e.g. `std_4`                                   |
+| subject     | yes      | e.g. `math`                                    |
+| branch      | yes      | `easy` \| `medium` \| `hard` \| `dynamic`      |
+| period      | no       | e.g. `term_1` — omit for SEA (capstone)        |
+| curriculum  | no       | default `tt_primary`                           |
+
+Finds the lowest-sequence active pack in the requested branch that the child has not yet completed (not in `child_pack_history`). Returns questions shuffled for delivery plus the full answer sheet for WP session storage.
+
+**Response:**
+```json
+{
+  "pack_id":         "uuid",
+  "branch":          "easy",
+  "sequence_number": 1,
+  "question_count":  12,
+  "meta": {
+    "curriculum":       "tt_primary",
+    "level":            "std_4",
+    "period":           "term_1",
+    "subject":          "math",
+    "branch":           "easy",
+    "pack_type":        "topic",
+    "module_numbers":   [4],
+    "module_assignments": null
+  },
+  "questions":    [ /* shuffled, no correct_answer */ ],
+  "answer_sheet": [
+    { "question_id": "uuid", "correct_answer": "B", "explanation": "..." }
+  ]
+}
+```
+
+**503 (no_pack_available)** — returned when the child has exhausted all built packs for this branch. Background generation is queued automatically.
+
+```json
+{
+  "error":               "No pack available for this branch — generation queued.",
+  "code":                "no_pack_available",
+  "retry_after_seconds": 30
+}
+```
+
+---
+
+### Submit a pack exam
+
+```
+POST /submit-pack-exam
+```
+
+**Auth:** Bearer JWT (child)
+
+**Body:**
+```json
+{
+  "pack_id":               "uuid",
+  "session_id":            "uuid",
+  "answers":               { "question_uuid": "B", "question_uuid2": "A" },
+  "time_elapsed_seconds":  420,
+  "time_remaining_seconds": 660
+}
+```
+
+Scores the answers against the pack's answer sheet in `question_bank`, writes `exam_sessions` (source=`pack`), upserts `child_pack_history`, and fires `checkAndAutoGenerate` in the background.
+
+**Response:**
+```json
+{
+  "session_id":    "uuid",
+  "pack_id":       "uuid",
+  "score":         9,
+  "total":         12,
+  "percentage":    75,
+  "topic_breakdown": [
+    { "topic": "Fractions", "correct": 4, "total": 5, "percentage": 80 }
+  ],
+  "answer_sheet": [
+    { "question_id": "uuid", "selected_answer": "B", "correct_answer": "B", "is_correct": true, "explanation": "..." }
+  ]
+}
+```
+
+---
+
+### Reset a child's pack history (Admin)
+
+```
+DELETE /trial/child-history?child_id=<integer>
+```
+
+**Auth:** Server key (`X-AEP-Server-Key`)
+
+Deletes all `child_pack_history` rows for the given child, resetting them to Pack #1 on every sequential branch. Called by the WP Admin "Reset Pack History" button on the child profile page.
+
+**Response:**
+```json
+{ "deleted": 5, "child_id": 42 }
+```
+
+`deleted: 0` is a valid success response if the child had no pack history.
+
+---
+
 ## Question Bank (Admin — server key)
 
 ### Slot coverage board
