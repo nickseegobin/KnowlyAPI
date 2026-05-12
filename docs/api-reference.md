@@ -113,6 +113,71 @@ POST /cancel-exam
 
 ---
 
+## Trial Assembly (Admin — server key)
+
+### Assemble a trial from the question bank
+
+```
+POST /trial/assemble
+```
+
+**Auth:** Server key (`X-AEP-Server-Key`)
+
+Draws questions directly from `question_bank` (module-number based, not pack-based).
+Used for on-demand assembly when the pack queue is not yet seeded.
+Serves the least-recently-used questions first; marks `last_served_at` and increments `times_served`.
+If the pool is short, attempts synchronous generation to fill the shortfall before responding.
+
+**Body:**
+```json
+{
+  "curriculum":           "tt_primary",
+  "level":                "std_4",
+  "period":               "term_1",
+  "subject":              "math",
+  "difficulty":           "easy",
+  "module_numbers":       [4, 5],
+  "question_count":       10,
+  "exclude_question_ids": []
+}
+```
+
+`module_numbers` — one or more module numbers to draw from. Questions are distributed
+proportionally via round-robin across modules when multiple are requested.
+
+`exclude_question_ids` — optional array of UUIDs to skip (cross-session deduplication).
+
+**Response:**
+```json
+{
+  "meta": {
+    "curriculum":              "tt_primary",
+    "level":                   "std_4",
+    "period":                  "term_1",
+    "subject":                 "math",
+    "difficulty":              "easy",
+    "module_numbers":          [4, 5],
+    "question_count":          10,
+    "time_per_question_seconds": 90,
+    "total_time_seconds":      900,
+    "topics_covered":          ["Number Patterns", "Fractions"],
+    "source":                  "pool",
+    "from_pool":               10,
+    "from_generated":          0
+  },
+  "questions":    [ /* shuffled, no correct_answer */ ],
+  "answer_sheet": [
+    { "question_id": "uuid", "correct_answer": "B", "explanation": "..." }
+  ]
+}
+```
+
+`source` is `"pool"` when all questions came from existing stock, `"mixed"` when some were generated on-the-fly.
+
+**503 (pool_empty)** — no questions available and generation failed.
+
+---
+
 ## Trial Packs (Admin — server key)
 
 ### Build a static pack
@@ -227,6 +292,9 @@ GET /trial-packs/list?level=std_4&subject=math&period=term_1&difficulty=easy&sta
 ```
 
 `status` accepts: `active`, `archived`, `all`.
+
+Each pack object includes `branch` (`easy` | `medium` | `hard` | `dynamic`) and
+`pack_sequence_number` (integer, sequential per scope+branch) added in Phase 4.
 
 ---
 
@@ -603,4 +671,4 @@ Returns `{ status: "ok", timestamp }`. No auth required.
 
 ---
 
-*Last updated: 2026-05-11. Keep this document in sync with `src/routes/` when endpoints change.*
+*Last updated: 2026-05-11 (Phase 4 Sequential Delivery). Keep this document in sync with `src/routes/` when endpoints change.*
