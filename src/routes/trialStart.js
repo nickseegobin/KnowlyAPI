@@ -448,4 +448,30 @@ router.get('/next-pack', requireServerKey, async (req, res) => {
   });
 });
 
+// ── DELETE /api/v1/trial/child-history ───────────────────────────────────────
+// Admin reset — clears all child_pack_history rows for a child.
+// Called by the WP admin when an admin clicks "Reset Pack History" on a child.
+//
+// Query: child_id  (required, integer)
+router.delete('/child-history', requireServerKey, async (req, res) => {
+  const child_id = parseInt(req.query.child_id, 10);
+
+  if (!child_id || isNaN(child_id)) {
+    return res.status(400).json({ error: 'child_id is required', code: 'missing_fields' });
+  }
+
+  const supabase = getSupabase();
+
+  const { error, count } = await supabase
+    .from('child_pack_history')
+    .delete({ count: 'exact' })
+    .eq('child_id', child_id);
+
+  if (error) return res.status(500).json({ error: error.message });
+
+  console.log(`[trial/child-history] Reset pack history for child ${child_id}: ${count ?? 0} rows deleted`);
+
+  return res.json({ deleted: count ?? 0, child_id });
+});
+
 module.exports = router;
