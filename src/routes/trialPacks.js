@@ -1,6 +1,7 @@
-const express    = require('express');
-const router     = express.Router();
-const getSupabase = require('../config/supabase');
+const express      = require('express');
+const router       = express.Router();
+const getSupabase  = require('../config/supabase');
+const { buildPack, buildDynamicPack, difficultyMix, shuffle, fetchUnassigned, PACK_SIZE } = require('../services/packBuilder');
 
 const requireServerKey = (req, res, next) => {
   const key = req.headers['x-aep-server-key'];
@@ -10,55 +11,7 @@ const requireServerKey = (req, res, next) => {
   next();
 };
 
-// ── Pack configuration ────────────────────────────────────────────────────────
-
-const PACK_SIZE = { easy: 12, medium: 18, hard: 24 };
-
-// Explicit 3-pool split per pack difficulty.
-// Easy   (12): 9 easy  + 2 medium + 1 hard   — success-focused with a challenge taste
-// Medium (18): 4 easy  + 9 medium + 5 hard   — balanced core with hard ceiling
-// Hard   (24): 3 easy  + 9 medium + 12 hard  — mastery-focused, full spectrum
-function difficultyMix(packDifficulty) {
-  if (packDifficulty === 'easy')   return { easy: 9,  medium: 2, hard: 1  };
-  if (packDifficulty === 'medium') return { easy: 4,  medium: 9, hard: 5  };
-  /* hard */                       return { easy: 3,  medium: 9, hard: 12 };
-}
-
-function shuffle(arr) {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
-// Fetch unassigned active questions from specific difficulty pools, randomly ordered.
-async function fetchUnassigned(supabase, filters, difficultyList, count) {
-  if (count <= 0) return [];
-
-  const { curriculum, level, period, subject, module_number } = filters;
-
-  let query = supabase
-    .from('question_bank')
-    .select('id, question, options, correct_answer, difficulty, explanation, tip, module_number, module_title, topic')
-    .eq('curriculum', curriculum)
-    .eq('level', level)
-    .eq('subject', subject)
-    .eq('status', 'active')
-    .is('assigned_pack_id', null)
-    .in('difficulty', difficultyList);
-
-  if (period) query = query.eq('period', period);
-  else        query = query.is('period', null);
-
-  if (module_number != null) query = query.eq('module_number', module_number);
-
-  const { data, error } = await query;
-  if (error) throw error;
-
-  return shuffle(data || []).slice(0, count);
-}
+// difficultyMix, shuffle, fetchUnassigned, PACK_SIZE imported from packBuilder
 
 // ── POST /api/v1/trial-packs/build ───────────────────────────────────────────
 // Build a pre-assembled trial pack from unassigned QB questions.
@@ -90,103 +43,68 @@ router.post('/build', requireServerKey, async (req, res) => {
     return res.status(400).json({ error: 'pack_type must be topic | general', code: 'invalid_pack_type' });
   }
 
-  const supabase = getSupabase();
-  const mix      = difficultyMix(difficulty);
-  const modNum   = module_number != null ? parseInt(module_number, 10) : null;
-  const filters  = { curriculum, level, period: period || null, subject, module_number: modNum };
-
-  let easyQs, mediumQs, hardQs;
-  try {
-    [easyQs, mediumQs, hardQs] = await Promise.all([
-      fetchUnassigned(supabase, filters, ['easy'],   mix.easy),
-      fetchUnassigned(supabase, filters, ['medium'], mix.medium),
-      fetchUnassigned(supabase, filters, ['hard'],   mix.hard),
-    ]);
-  } catch (err) {
-    console.error('[trial-packs/build] Query failed:', err.message);
-    return res.status(500).json({ error: err.message, code: 'query_failed' });
-  }
-
-  // Report any pool that came up short so the admin knows exactly what to generate
-  const shortfalls = [
-    easyQs.length   < mix.easy   && { difficulty: 'easy',   need: mix.easy,   found: easyQs.length   },
-    mediumQs.length < mix.medium && { difficulty: 'medium', need: mix.medium, found: mediumQs.length },
-    hardQs.length   < mix.hard   && { difficulty: 'hard',   need: mix.hard,   found: hardQs.length   },
-  ].filter(Boolean);
-
-  if (shortfalls.length > 0) {
-    return res.status(422).json({
-      error:      'Insufficient unassigned questions in one or more difficulty pools.',
-      code:       'insufficient_questions',
-      shortfalls,
-      tip:        'Generate more questions for the indicated difficulty slots first.',
-    });
-  }
-
-  let selected = shuffle([...easyQs, ...mediumQs, ...hardQs]);
-
+  // ── Preview: return questions without saving ──────────────────────────────
   if (preview) {
+    const supabase = getSupabase();
+    const mix      = difficultyMix(difficulty);
+    const modNum   = module_number != null ? parseInt(module_number, 10) : null;
+    const filters  = { curriculum, level, period: period || null, subject, module_number: modNum };
+
+    let easyQs, mediumQs, hardQs;
+    try {
+      [easyQs, mediumQs, hardQs] = await Promise.all([
+        fetchUnassigned(supabase, filters, ['easy'],   mix.easy),
+        fetchUnassigned(supabase, filters, ['medium'], mix.medium),
+        fetchUnassigned(supabase, filters, ['hard'],   mix.hard),
+      ]);
+    } catch (err) {
+      return res.status(500).json({ error: err.message, code: 'query_failed' });
+    }
+
+    const shortfalls = [
+      easyQs.length   < mix.easy   && { difficulty: 'easy',   need: mix.easy,   found: easyQs.length   },
+      mediumQs.length < mix.medium && { difficulty: 'medium', need: mix.medium, found: mediumQs.length },
+      hardQs.length   < mix.hard   && { difficulty: 'hard',   need: mix.hard,   found: hardQs.length   },
+    ].filter(Boolean);
+
     return res.json({
       preview:        true,
       difficulty,
       pack_type,
-      question_count: selected.length,
-      questions:      selected,
+      question_count: (easyQs.length + mediumQs.length + hardQs.length),
+      shortfalls,
+      questions:      shuffle([...easyQs, ...mediumQs, ...hardQs]),
     });
   }
 
-  // ── Save pack ─────────────────────────────────────────────────────────────
-  const question_ids   = selected.map(q => q.id);
-  const module_numbers = modNum != null
-    ? [modNum]
-    : [...new Set(selected.map(q => q.module_number).filter(Boolean))].sort((a, b) => a - b);
-
-  const { data: pack, error: packErr } = await supabase
-    .from('trial_packs')
-    .insert({
-      curriculum,
-      level,
-      period:         period || null,
-      subject,
-      pack_type,
-      module_numbers,
+  // ── Build + save via shared service ──────────────────────────────────────
+  try {
+    const result = await buildPack({
+      curriculum, level, period: period || null, subject,
+      module_number, pack_type, difficulty,
+    });
+    console.log(`[trial-packs/build] Pack ${result.pack_id}: ${result.question_count}q, ${difficulty}, ${subject}/${level} [seq ${result.sequence_number}]`);
+    return res.status(201).json({
+      pack_id:        result.pack_id,
       difficulty,
-      question_ids,
-      question_count: selected.length,
-    })
-    .select()
-    .single();
-
-  if (packErr) {
-    console.error('[trial-packs/build] Insert failed:', packErr.message);
-    return res.status(500).json({ error: packErr.message, code: 'pack_insert_failed' });
-  }
-
-  // Mark questions as assigned to this pack
-  const { error: assignErr } = await supabase
-    .from('question_bank')
-    .update({ assigned_pack_id: pack.id })
-    .in('id', question_ids);
-
-  if (assignErr) {
-    console.error('[trial-packs/build] Assignment failed:', assignErr.message);
-    return res.status(207).json({
-      warning:        'Pack created but question assignment failed — run a repair.',
-      pack_id:        pack.id,
-      question_count: selected.length,
-      questions:      selected,
+      pack_type,
+      module_numbers: result.questions ? [...new Set(result.questions.map(q => q.module_number).filter(Boolean))].sort((a,b)=>a-b) : [],
+      question_count: result.question_count,
+      sequence_number: result.sequence_number,
+      questions:      result.questions,
     });
+  } catch (err) {
+    if (err.code === 'insufficient_questions') {
+      return res.status(422).json({
+        error:      'Insufficient unassigned questions in one or more difficulty pools.',
+        code:       'insufficient_questions',
+        shortfalls: err.shortfalls,
+        tip:        'Generate more questions for the indicated difficulty slots first.',
+      });
+    }
+    console.error('[trial-packs/build] Failed:', err.message);
+    return res.status(500).json({ error: err.message, code: 'build_failed' });
   }
-
-  console.log(`[trial-packs/build] Pack ${pack.id}: ${selected.length}q, ${difficulty}, ${subject}/${level}`);
-  return res.status(201).json({
-    pack_id:        pack.id,
-    difficulty,
-    pack_type,
-    module_numbers,
-    question_count: selected.length,
-    questions:      selected,
-  });
 });
 
 // ── POST /api/v1/trial-packs/dynamic-preview ─────────────────────────────────

@@ -2,6 +2,7 @@ const express    = require('express');
 const router     = express.Router();
 const getSupabase = require('../config/supabase');
 const { generateQuestions: generateQBQuestions, checkAndReplenish } = require('../services/questionBankGenerator');
+const { checkAndAutoGenerate } = require('../services/autoGenerate');
 
 const requireServerKey = (req, res, next) => {
   const key = req.headers['x-aep-server-key'];
@@ -313,6 +314,137 @@ router.post('/start', requireServerKey, async (req, res) => {
     meta: { curriculum, level, period: period || null, subject, scope, scope_ref, difficulty, question_count: questions.length, source: 'pool' },
     questions:    safeQuestions,
     answer_sheet: answerSheet,
+  });
+});
+
+// ── GET /api/v1/trial/next-pack ───────────────────────────────────────────────
+// Find and return the next unplayed pack for a child in a given branch.
+// Called by the WP plugin (server key) before presenting a trial to a child.
+//
+// Query: curriculum, level, period, subject, branch, child_id
+// branch = 'easy' | 'medium' | 'hard' | 'dynamic'
+//
+// Response: { pack_id, branch, sequence_number, question_count, meta, questions }
+// 503 (no_pack_available) if no eligible pack exists — triggers background generation.
+router.get('/next-pack', requireServerKey, async (req, res) => {
+  const {
+    curriculum = 'tt_primary',
+    level,
+    subject,
+    period,
+    branch,
+    child_id,
+  } = req.query;
+
+  if (!level || !subject || !branch || !child_id) {
+    return res.status(400).json({
+      error: 'level, subject, branch, child_id are required',
+      code:  'missing_fields',
+    });
+  }
+
+  if (!['easy', 'medium', 'hard', 'dynamic'].includes(branch)) {
+    return res.status(400).json({ error: 'branch must be easy | medium | hard | dynamic', code: 'invalid_branch' });
+  }
+
+  const supabase   = getSupabase();
+  const childIdInt = parseInt(child_id, 10);
+
+  // ── 1. Get the child's completed pack IDs for this scope+branch ─────────────
+  const { data: history } = await supabase
+    .from('child_pack_history')
+    .select('pack_id')
+    .eq('child_id', childIdInt);
+
+  const completedIds = (history || []).map(r => r.pack_id);
+
+  // ── 2. Find the lowest-sequence active pack the child hasn't completed ────────
+  let packQ = supabase
+    .from('trial_packs')
+    .select('id, pack_sequence_number, difficulty, pack_type, module_numbers, question_count, module_assignments')
+    .eq('curriculum', curriculum)
+    .eq('level', level)
+    .eq('subject', subject)
+    .eq('branch', branch)
+    .eq('status', 'active')
+    .order('pack_sequence_number', { ascending: true })
+    .limit(1);
+
+  if (period) packQ = packQ.eq('period', period);
+  else        packQ = packQ.is('period', null);
+
+  if (completedIds.length) {
+    packQ = packQ.not('id', 'in', `(${completedIds.map(id => `"${id}"`).join(',')})`);
+  }
+
+  const { data: packRows, error: packErr } = await packQ;
+  if (packErr) return res.status(500).json({ error: packErr.message });
+
+  const pack = packRows?.[0];
+
+  if (!pack) {
+    // No pack available — trigger background generation and tell client to retry
+    const scope = { curriculum, level, period: period || null, subject };
+    checkAndAutoGenerate(scope);
+    return res.status(503).json({
+      error: 'No pack available for this branch — generation queued.',
+      code:  'no_pack_available',
+      retry_after_seconds: 30,
+    });
+  }
+
+  // ── 3. Fetch questions for this pack from question_bank ───────────────────────
+  const { data: questions, error: qErr } = await supabase
+    .from('question_bank')
+    .select('id, question, options, tip, difficulty, module_number, module_title, topic, correct_answer, explanation')
+    .eq('assigned_pack_id', pack.id);
+
+  if (qErr) return res.status(500).json({ error: qErr.message });
+
+  // Shuffle for delivery (order locked at build time, randomise at serve time)
+  const qs = [...(questions || [])];
+  for (let i = qs.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [qs[i], qs[j]] = [qs[j], qs[i]];
+  }
+
+  const safeQuestions = qs.map(q => ({
+    question_id: q.id,
+    question:    q.question,
+    options:     q.options,
+    tip:         q.tip || null,
+    meta: {
+      topic:         q.topic,
+      module_title:  q.module_title,
+      module_number: q.module_number,
+      difficulty:    q.difficulty,
+    },
+  }));
+
+  // Answer sheet kept server-side — returned here for WP session storage
+  const answer_sheet = qs.map(q => ({
+    question_id:    q.id,
+    correct_answer: q.correct_answer,
+    explanation:    q.explanation || '',
+  }));
+
+  return res.json({
+    pack_id:         pack.id,
+    branch,
+    sequence_number: pack.pack_sequence_number,
+    question_count:  qs.length,
+    meta: {
+      curriculum,
+      level,
+      period:             period || null,
+      subject,
+      branch,
+      pack_type:          pack.pack_type,
+      module_numbers:     pack.module_numbers,
+      module_assignments: pack.module_assignments || null,
+    },
+    questions:    safeQuestions,
+    answer_sheet,
   });
 });
 
