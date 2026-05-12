@@ -229,6 +229,50 @@ Each pool (easy/medium/hard) is fetched independently. Shortfalls are reported i
 
 ---
 
+### Build a dynamic pack
+
+```
+POST /trial-packs/dynamic-build
+```
+
+**Auth:** Server key (`X-AEP-Server-Key`)
+
+Builds and persists a dynamic pack: difficulty is randomly assigned per module at build time.
+Questions are locked (`assigned_pack_id` set). Pack is saved with `branch='dynamic'` and gets a `pack_sequence_number`.
+
+**Body:**
+```json
+{
+  "curriculum":           "tt_primary",
+  "level":                "std_4",
+  "period":               "term_1",
+  "subject":              "math",
+  "modules":              [4, 5, 6, 7],
+  "questions_per_module": 4
+}
+```
+
+**Response (201):**
+```json
+{
+  "pack_id":          "uuid",
+  "branch":           "dynamic",
+  "sequence_number":  3,
+  "question_count":   16,
+  "module_assignments": [
+    { "module_number": 4, "difficulty_drawn": "hard",   "questions_drawn": 4 },
+    { "module_number": 5, "difficulty_drawn": "easy",   "questions_drawn": 4 },
+    { "module_number": 6, "difficulty_drawn": "medium", "questions_drawn": 4 },
+    { "module_number": 7, "difficulty_drawn": "easy",   "questions_drawn": 4 }
+  ],
+  "questions": [ /* shuffled, no correct_answer */ ]
+}
+```
+
+**422 (insufficient_questions)** — one or more modules had too few questions available.
+
+---
+
 ### Dynamic preview (multi-topic)
 
 ```
@@ -671,4 +715,67 @@ Returns `{ status: "ok", timestamp }`. No auth required.
 
 ---
 
-*Last updated: 2026-05-11 (Phase 4 Sequential Delivery). Keep this document in sync with `src/routes/` when endpoints change.*
+---
+
+## Quest Questions (separate from trial question_bank)
+
+### Generate questions for a quest
+
+```
+POST /quest/generate-questions
+```
+
+**Auth:** Server key (`X-AEP-Server-Key`)
+
+Generates exactly 3 MCQs for a quest module using AI and stores them in `quest_questions`. Retires any existing active questions for the same `quest_id` first.
+
+**Body:**
+```json
+{
+  "curriculum":   "tt_primary",
+  "level":        "std_4",
+  "period":       "term_1",
+  "subject":      "math",
+  "quest_id":     "q-std_4-math-a1b2c3d4",
+  "module_title": "Number Patterns",
+  "topics":       ["Sequences", "Patterns", "Rules"]
+}
+```
+
+**Response (201):**
+```json
+{ "quest_id": "q-std_4-math-a1b2c3d4", "question_count": 3 }
+```
+
+---
+
+### Get quest questions (child delivery)
+
+```
+GET /quest/:quest_id/questions
+```
+
+**Auth:** Bearer JWT (child) or Server key (admin preview)
+
+Returns 3 active questions without `correct_answer`.
+
+---
+
+## Curriculum Topics (Admin — server key)
+
+### Remove all topics for a subject scope
+
+```
+DELETE /curriculum-topics/by-scope?level=std_4&subject=math
+```
+
+**Auth:** Server key (`X-AEP-Server-Key`)
+
+Archives all active `curriculum_topics` rows for the scope and removes Pinecone vectors.
+`period` param is optional: omit to archive all periods; pass `term_1` for a specific term; pass `null` for capstone only.
+
+**Response:** `{ "archived": 42 }`
+
+---
+
+*Last updated: 2026-05-12 (Quest Questions + Dynamic Pack Build). Keep this document in sync with `src/routes/` when endpoints change.*

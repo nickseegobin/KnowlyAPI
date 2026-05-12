@@ -107,6 +107,64 @@ router.post('/build', requireServerKey, async (req, res) => {
   }
 });
 
+// ── POST /api/v1/trial-packs/dynamic-build ───────────────────────────────────
+// Build and save a dynamic pack. Difficulty is randomly assigned per module at
+// build time and locked. Questions are drawn and assigned to the pack.
+//
+// Body: { curriculum, level, period, subject, modules: number[], questions_per_module }
+router.post('/dynamic-build', requireServerKey, async (req, res) => {
+  const {
+    curriculum           = 'tt_primary',
+    level,
+    period               = null,
+    subject,
+    modules              = [],
+    questions_per_module = 4,
+  } = req.body;
+
+  if (!level || !subject) {
+    return res.status(400).json({ error: 'level and subject are required', code: 'missing_fields' });
+  }
+  if (!Array.isArray(modules) || modules.length === 0) {
+    return res.status(400).json({ error: 'modules must be a non-empty array of module numbers', code: 'missing_modules' });
+  }
+
+  const qpm = Math.min(10, Math.max(1, parseInt(questions_per_module, 10) || 4));
+
+  try {
+    const result = await buildDynamicPack({
+      curriculum,
+      level,
+      period: period || null,
+      subject,
+      module_numbers:       modules.map(m => parseInt(m, 10)),
+      questions_per_module: qpm,
+    });
+
+    console.log(`[trial-packs/dynamic-build] Pack ${result.pack_id}: ${result.question_count}q dynamic, ${subject}/${level} [seq ${result.sequence_number}]`);
+
+    return res.status(201).json({
+      pack_id:            result.pack_id,
+      branch:             'dynamic',
+      sequence_number:    result.sequence_number,
+      question_count:     result.question_count,
+      module_assignments: result.module_assignments,
+      questions:          result.questions,
+    });
+  } catch (err) {
+    if (err.code === 'insufficient_questions') {
+      return res.status(422).json({
+        error:      'Insufficient questions in one or more module/difficulty slots.',
+        code:       'insufficient_questions',
+        shortfalls: err.shortfalls,
+        tip:        'Generate more questions for the indicated slots first.',
+      });
+    }
+    console.error('[trial-packs/dynamic-build] Failed:', err.message);
+    return res.status(500).json({ error: err.message, code: 'build_failed' });
+  }
+});
+
 // ── POST /api/v1/trial-packs/dynamic-preview ─────────────────────────────────
 // Preview a multi-topic dynamic pack. Each selected module is randomly assigned
 // a difficulty; questions_per_module questions are drawn from that module's pool

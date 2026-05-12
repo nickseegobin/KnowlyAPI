@@ -2,8 +2,18 @@ const express = require('express');
 const router  = express.Router();
 const { authenticateToken } = require('../middleware/auth');
 const { generateQuestContent, storeQuest } = require('../services/questGenerator');
+const { generateContent } = require('../services/ai');
+const { PROMPTS }         = require('../config/prompts');
 const getSupabase = require('../config/supabase');
 const crypto = require('crypto');
+
+function requireServerKey(req, res, next) {
+  const key = req.headers['x-aep-server-key'];
+  if (!key || key !== process.env.AEP_SERVER_KEY) {
+    return res.status(401).json({ error: 'Server key required', code: 'unauthorized' });
+  }
+  next();
+}
 
 // ── GET /api/v1/quest/catalogue ───────────────────────────────────────────────
 // Returns approved Quests for a given level, optional period and subject.
@@ -567,6 +577,126 @@ router.delete('/editor/:quest_id', async (req, res) => {
 
   console.log(`[quest/delete] Deleted ${quest_id}`);
   return res.json({ quest_id, deleted: true });
+});
+
+// ── POST /api/v1/quest/generate-questions ─────────────────────────────────────
+// Server-key only. Generates 3 MCQs for a quest module and stores them in
+// quest_questions. Replaces any existing active questions for the same quest_id.
+router.post('/generate-questions', requireServerKey, async (req, res) => {
+  const {
+    curriculum   = 'tt_primary',
+    level,
+    period       = null,
+    subject,
+    quest_id,
+    module_title,
+    topics       = [],   // array of topic strings for this module
+  } = req.body;
+
+  if (!level || !subject || !quest_id || !module_title) {
+    return res.status(400).json({
+      error: 'level, subject, quest_id, and module_title are required',
+      code: 'missing_fields',
+    });
+  }
+
+  try {
+    const prompts  = PROMPTS[curriculum];
+    if (!prompts?.quest_questions) {
+      return res.status(500).json({ error: 'Prompt not configured for curriculum', code: 'config_error' });
+    }
+
+    const prompt = prompts.quest_questions({
+      level, period, subject,
+      moduleTitle: module_title,
+      topics: topics.length ? topics : [module_title],
+      curriculumChunks: '',
+    });
+
+    const raw    = await generateContent(prompt, { maxTokens: 2000 });
+    let parsed;
+
+    try {
+      const text = raw.trim().replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+      parsed = JSON.parse(text);
+      if (!Array.isArray(parsed)) throw new Error('Response must be a JSON array');
+    } catch (parseErr) {
+      console.error('[quest/generate-questions] Parse error:', parseErr.message, raw.slice(0, 200));
+      return res.status(500).json({ error: 'Failed to parse AI response', code: 'parse_error' });
+    }
+
+    const valid = parsed.filter(q =>
+      q && q.question && q.options && ['A','B','C','D'].includes(q.correct_answer) &&
+      ['A','B','C','D'].every(k => q.options[k])
+    ).slice(0, 3);
+
+    if (valid.length === 0) {
+      return res.status(500).json({ error: 'No valid questions generated', code: 'generation_error' });
+    }
+
+    const supabase = getSupabase();
+
+    // Retire existing questions for this quest
+    await supabase.from('quest_questions').update({ status: 'retired' }).eq('quest_id', quest_id).eq('status', 'active');
+
+    // Insert new questions
+    const rows = valid.map((q, i) => ({
+      quest_id,
+      curriculum,
+      level,
+      period:         period || null,
+      subject,
+      module_title,
+      sort_order:     q.sort_order || (i + 1),
+      difficulty:     q.difficulty || (i === 0 ? 'easy' : i === 1 ? 'medium' : 'hard'),
+      topic:          q.topic || module_title,
+      question:       q.question,
+      options:        q.options,
+      correct_answer: q.correct_answer,
+      explanation:    q.explanation || null,
+      tip:            q.tip        || null,
+      cognitive_level: q.cognitive_level || 'comprehension',
+      status:         'active',
+    }));
+
+    const { error: insertErr } = await supabase.from('quest_questions').insert(rows);
+    if (insertErr) throw insertErr;
+
+    console.log(`[quest/generate-questions] Generated ${rows.length} questions for quest ${quest_id}`);
+    return res.status(201).json({ quest_id, question_count: rows.length });
+  } catch (err) {
+    console.error('[quest/generate-questions] Error:', err.message);
+    return res.status(500).json({ error: 'Quest question generation failed', code: 'generation_error' });
+  }
+});
+
+// ── GET /api/v1/quest/:quest_id/questions ─────────────────────────────────────
+// Returns 3 active quest questions WITHOUT correct_answer (for student delivery).
+// Server-key also accepted for admin preview.
+router.get('/:quest_id/questions', async (req, res) => {
+  const authHeader = req.headers['authorization'] || '';
+  const serverKey  = req.headers['x-aep-server-key'];
+  const isAdmin    = serverKey && serverKey === process.env.AEP_SERVER_KEY;
+
+  if (!isAdmin && !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Authentication required', code: 'unauthorized' });
+  }
+
+  const { quest_id } = req.params;
+
+  const { data, error } = await getSupabase()
+    .from('quest_questions')
+    .select('id, quest_id, sort_order, difficulty, topic, question, options, explanation, tip, cognitive_level')
+    .eq('quest_id', quest_id)
+    .eq('status', 'active')
+    .order('sort_order', { ascending: true });
+
+  if (error) {
+    console.error('[quest/questions] Supabase error:', error);
+    return res.status(500).json({ error: 'Failed to fetch questions', code: 'server_error' });
+  }
+
+  return res.json({ quest_id, questions: data || [], count: (data || []).length });
 });
 
 module.exports = router;

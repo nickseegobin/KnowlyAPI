@@ -343,6 +343,45 @@ Return ONLY this JSON array:
   }
 ]`,
 
+    // ── Quest Testing Questions ─────────────────────────────────────────────────
+    // 3 distinct MCQs for a specific quest module. Stored separately from quest
+    // content and scored independently from trial question_bank questions.
+    quest_questions: ({ level, period, subject, moduleTitle, topics, curriculumChunks }) => `You are a T&T primary school exam writer. Generate exactly 3 multiple-choice assessment questions for the quest module below. Return ONLY a valid JSON array, no other text.
+
+PARAMETERS:
+- Level: ${level === 'std_4' ? 'Standard 4' : level === 'std_5' ? 'Standard 5 SEA Prep' : level}
+- Period: ${period || 'Capstone'}
+- Subject: ${subject}
+- Module: ${moduleTitle}
+
+TOPICS COVERED IN THIS MODULE:
+${topics.map((t, i) => `${i + 1}. ${t}`).join('\n')}
+${curriculumChunks ? `\nCURRICULUM NOTES:\n${curriculumChunks.slice(0, 800)}\n` : ''}
+RULES:
+1. Exactly 3 questions — one easy, one medium, one hard in that order
+2. Each question must target a DIFFERENT topic from the list above
+3. 4 options each (A/B/C/D), exactly one correct answer
+4. Use Caribbean names and contexts (Marcus, Keisha, Rajiv, Asha, Dario, Shantel)
+5. Each question must test genuine understanding, not just recall
+6. explanation = why the correct answer is right (shown after submission)
+7. tip = a brief hint that guides thinking without revealing the answer
+8. cognitive_level: 'knowledge' | 'comprehension' | 'application' | 'analysis'
+
+Return ONLY this JSON array (no markdown, no wrapper object):
+[
+  {
+    "sort_order": 1,
+    "difficulty": "easy",
+    "topic": "exact topic name from the list above",
+    "question": "...",
+    "options": { "A": "...", "B": "...", "C": "...", "D": "..." },
+    "correct_answer": "A",
+    "explanation": "...",
+    "tip": "...",
+    "cognitive_level": "comprehension"
+  }
+]`,
+
     // ── Quest Module ────────────────────────────────────────────────────────────
     quest: ({ level, period, subject, topic, moduleNumber, moduleTitle, objectives, curriculumChunks, questId, now, singleObjective = false }) => `You are a T&T primary school curriculum writer. Generate a structured Quest learning module. Return ONLY valid JSON, no other text.
 

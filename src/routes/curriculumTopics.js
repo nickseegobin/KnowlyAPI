@@ -147,6 +147,61 @@ router.patch('/:id', requireServerKey, async (req, res) => {
   }
 });
 
+// ── DELETE /api/v1/curriculum-topics/by-scope ────────────────────────────────
+// Archives all active topics for a (curriculum × level × subject × period) scope.
+// Also removes their Pinecone vectors. Used by WP Admin "Remove Subject" action.
+router.delete('/by-scope', requireServerKey, async (req, res) => {
+  const { curriculum = 'tt_primary', level, subject, period } = req.query;
+  if (!level || !subject) {
+    return res.status(400).json({ error: 'level and subject are required', code: 'missing_fields' });
+  }
+
+  try {
+    const supabase = getSupabase();
+
+    let query = supabase
+      .from('curriculum_topics')
+      .select('id')
+      .eq('curriculum', curriculum)
+      .eq('level', level)
+      .eq('subject', subject)
+      .eq('status', 'active');
+
+    if (period === undefined || period === '') {
+      // No period param = archive ALL periods (including capstone) for this subject
+    } else if (period === 'null') {
+      query = query.is('period', null);   // capstone only
+    } else {
+      query = query.eq('period', period); // specific term
+    }
+
+    const { data: rows, error: selectErr } = await query;
+    if (selectErr) throw selectErr;
+
+    if (!rows || rows.length === 0) {
+      return res.json({ archived: 0, message: 'No active topics found for this scope.' });
+    }
+
+    const ids = rows.map(r => r.id);
+
+    const { error: archiveErr } = await supabase
+      .from('curriculum_topics')
+      .update({ status: 'archived' })
+      .in('id', ids);
+
+    if (archiveErr) throw archiveErr;
+
+    // Remove Pinecone vectors in background
+    ids.forEach(id => fireRemoveTopic(id));
+
+    console.log(`[curriculum-topics/by-scope] Archived ${ids.length} topics for ${curriculum}/${level}/${subject}/${period ?? 'all-periods'}`);
+    return res.json({ archived: ids.length });
+  } catch (err) {
+    console.error('[curriculum-topics/by-scope] Error:', err.message);
+    return res.status(500).json({ error: 'Failed to archive topics', code: 'server_error' });
+  }
+});
+
 // ── DELETE /api/v1/curriculum-topics/:id ─────────────────────────────────────
 // Archives the row (status = 'archived') — does not hard-delete.
 router.delete('/:id', requireServerKey, async (req, res) => {
