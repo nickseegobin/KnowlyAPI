@@ -266,7 +266,7 @@ router.get('/list', requireServerKey, async (req, res) => {
 
   let query = supabase
     .from('trial_packs')
-    .select('id, curriculum, level, period, subject, pack_type, module_numbers, difficulty, question_count, status, created_at', { count: 'exact' })
+    .select('id, curriculum, level, period, subject, pack_type, module_numbers, difficulty, branch, pack_sequence_number, question_count, status, created_at', { count: 'exact' })
     .eq('curriculum', curriculum)
     .order('created_at', { ascending: false })
     .range(offset, offset + perPage - 1);
