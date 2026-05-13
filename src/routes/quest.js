@@ -671,8 +671,9 @@ router.post('/generate-questions', requireServerKey, async (req, res) => {
 });
 
 // ── GET /api/v1/quest/:quest_id/questions ─────────────────────────────────────
-// Returns 3 active quest questions WITHOUT correct_answer (for student delivery).
-// Server-key also accepted for admin preview.
+// Returns active quest questions.
+// - JWT (child): correct_answer stripped — for student delivery.
+// - Server key:  correct_answer included — for WP scoring in submit_questions.
 router.get('/:quest_id/questions', async (req, res) => {
   const authHeader = req.headers['authorization'] || '';
   const serverKey  = req.headers['x-aep-server-key'];
@@ -684,9 +685,13 @@ router.get('/:quest_id/questions', async (req, res) => {
 
   const { quest_id } = req.params;
 
+  const selectFields = isAdmin
+    ? 'id, quest_id, sort_order, difficulty, topic, question, options, correct_answer, explanation, tip, cognitive_level'
+    : 'id, quest_id, sort_order, difficulty, topic, question, options, explanation, tip, cognitive_level';
+
   const { data, error } = await getSupabase()
     .from('quest_questions')
-    .select('id, quest_id, sort_order, difficulty, topic, question, options, explanation, tip, cognitive_level')
+    .select(selectFields)
     .eq('quest_id', quest_id)
     .eq('status', 'active')
     .order('sort_order', { ascending: true });

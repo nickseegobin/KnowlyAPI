@@ -55,7 +55,7 @@ router.get('/child', authenticateToken, async (req, res) => {
     // ── 2. Fetch curriculum topics ────────────────────────────────────────────
     let topicsQ = supabase
       .from('curriculum_topics')
-      .select('id, subject, module_title, sort_order, topic, period')
+      .select('id, subject, module_number, module_title, sort_order, topic, period')
       .eq('curriculum', curriculum)
       .eq('level', level)
       .eq('status', 'active');
@@ -100,8 +100,9 @@ router.get('/child', authenticateToken, async (req, res) => {
 
       subjectBuckets[t.subject].topics.push({
         topic:          t.topic,
-        module_title:   t.module_title || null,
-        period:         t.period       || null,
+        module_number:  t.module_number ?? null,
+        module_title:   t.module_title  || null,
+        period:         t.period        || null,
         sort_order:     t.sort_order,
         sessions_count: topicSessions.length,
         avg_score:      avgScore,
