@@ -445,9 +445,11 @@ RULES:
    - 3 knowledge check questions (unscored — MCQ only, 4 options A/B/C/D)
 3. Language must be appropriate for a primary school student
 4. Use Caribbean names, places, and contexts throughout
-5. knowledge check questions must have: question, options, correct_answer, explanation
+5. Each knowledge check question MUST have: question, options (A/B/C/D), correct_answer, explanation, tip
+6. tip = a brief thinking prompt shown BEFORE the student answers — guides without revealing the answer
+7. explanation = why the correct answer is right, shown AFTER the student submits their answer
 
-Return this exact structure:
+Return this exact structure (fill in the sections array — this is just the shape):
 {
   "quest_id": "${questId}",
   "curriculum": "tt_primary",
@@ -461,7 +463,31 @@ Return this exact structure:
   "generated_at": "${now}",
   "status": "draft",
   "content": {
-    "sections": []
+    "sections": [
+      {
+        "section_number": 1,
+        "title": "Section title",
+        "explanation": ["Paragraph 1...", "Paragraph 2..."],
+        "worked_examples": [
+          {
+            "example_number": 1,
+            "context": "Real-world Caribbean context",
+            "problem": "The problem statement",
+            "solution": ["Step 1: ...", "Step 2: ..."]
+          }
+        ],
+        "knowledge_check": [
+          {
+            "question_number": 1,
+            "question": "MCQ question text",
+            "options": { "A": "...", "B": "...", "C": "...", "D": "..." },
+            "correct_answer": "A",
+            "explanation": "Why A is the correct answer...",
+            "tip": "A thinking prompt that guides without revealing the answer..."
+          }
+        ]
+      }
+    ]
   }
 }`,
 
