@@ -298,6 +298,72 @@ router.post('/complete', authenticateToken, async (req, res) => {
   return res.json({ completed: true, badge_awarded, quest_id: session.quest_id });
 });
 
+// ── POST /api/v1/quest/complete-progression ───────────────────────────────────
+// Server-key only. Called by the WP plugin after a quest session is marked
+// complete. Writes a record to exam_sessions so the progression API picks it up.
+// Body: { session_id, user_id, quest_id, subject, topic, curriculum, level, period, score }
+router.post('/complete-progression', requireServerKey, async (req, res) => {
+  const {
+    session_id,
+    user_id,
+    quest_id,
+    subject,
+    topic,
+    curriculum = 'tt_primary',
+    level,
+    period     = null,
+    score      = 100,
+  } = req.body;
+
+  if (!session_id || !user_id || !subject || !topic || !level) {
+    return res.status(400).json({
+      error: 'session_id, user_id, subject, topic, and level are required',
+      code:  'missing_fields',
+    });
+  }
+
+  const examSessionId = `quest-${session_id}`;
+
+  // Idempotent — skip if already recorded
+  const { data: existing } = await getSupabase()
+    .from('exam_sessions')
+    .select('session_id')
+    .eq('session_id', examSessionId)
+    .maybeSingle();
+
+  if (existing) {
+    return res.json({ recorded: false, reason: 'already_exists' });
+  }
+
+  const { error } = await getSupabase().from('exam_sessions').insert({
+    session_id:     examSessionId,
+    user_id:        String(user_id),
+    package_id:     null,
+    curriculum,
+    level,
+    period:         period || null,
+    subject,
+    difficulty:     null,
+    trial_type:     'quest',
+    topic,
+    source:         'direct',
+    state:          'completed',
+    score:          null,
+    percentage:     Number(score),
+    time_elapsed:   null,
+    time_remaining: null,
+    completed_at:   new Date().toISOString(),
+  });
+
+  if (error) {
+    console.error('[quest/complete-progression] Supabase error:', error);
+    return res.status(500).json({ error: 'Failed to record progression', code: 'server_error' });
+  }
+
+  console.log(`[quest/complete-progression] session=${session_id} user=${user_id} topic="${topic}" level=${level}`);
+  return res.json({ recorded: true, exam_session_id: examSessionId });
+});
+
 // ── DELETE /api/v1/quest/sessions/reset ──────────────────────────────────────
 // Server-key only. Wipes all quest_sessions for a user. Test use only.
 // Body: { user_id }

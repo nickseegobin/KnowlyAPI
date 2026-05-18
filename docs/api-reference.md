@@ -778,4 +778,82 @@ Archives all active `curriculum_topics` rows for the scope and removes Pinecone 
 
 ---
 
-*Last updated: 2026-05-12 (Quest Questions + Dynamic Pack Build). Keep this document in sync with `src/routes/` when endpoints change.*
+## Lesson Questions (separate from quest_questions)
+
+Lesson questions are stored in the `lesson_questions` Supabase table. They share the same
+3-question-per-quest structure as Quest Questions but are generated and delivered independently.
+Child-facing endpoints never return `correct_answer` — scoring is silent and admin-only.
+
+### Generate questions for a lesson
+
+```
+POST /lesson/generate-questions
+```
+
+**Auth:** Server key (`X-AEP-Server-Key`)
+
+Generates exactly 3 MCQs for a quest (used as a lesson) using AI and stores them in
+`lesson_questions`. Retires any existing active questions for the same `quest_id` first.
+
+Questions are framed at three cognitive levels:
+- Sort order 1: comprehension
+- Sort order 2: application
+- Sort order 3: analysis
+
+**Body:**
+```json
+{
+  "curriculum":   "tt_primary",
+  "level":        "std_4",
+  "period":       "term_1",
+  "subject":      "math",
+  "quest_id":     "q-std_4-math-a1b2c3d4",
+  "module_title": "Number Patterns",
+  "topics":       ["Sequences", "Patterns", "Rules"]
+}
+```
+
+**Response (201):**
+```json
+{ "quest_id": "q-std_4-math-a1b2c3d4", "question_count": 3 }
+```
+
+---
+
+### Get lesson questions
+
+```
+GET /lesson/:quest_id/questions
+```
+
+**Auth:** Bearer JWT (child delivery — no `correct_answer`) or Server key (admin preview — includes `correct_answer`)
+
+Returns active questions for the lesson. The server key path is called internally by the WP plugin
+when scoring a child's `submit-questions` submission.
+
+**Response (JWT — child delivery):**
+```json
+{
+  "questions": [
+    {
+      "id": "lq-uuid",
+      "quest_id": "q-std_4-math-a1b2c3d4",
+      "sort_order": 1,
+      "difficulty": "easy",
+      "topic": "Sequences",
+      "question": "What does 'sequence' mean in mathematics?",
+      "options": { "A": "...", "B": "...", "C": "...", "D": "..." },
+      "explanation": "A sequence follows a defined rule.",
+      "tip": "Think about what makes numbers ordered.",
+      "cognitive_level": "comprehension"
+    }
+  ]
+}
+```
+
+**Response (server key — adds `correct_answer`):**
+Same as above with `"correct_answer": "B"` added to each question object.
+
+---
+
+*Last updated: 2026-05-12 (Lesson Questions + Quest Questions + Dynamic Pack Build). Keep this document in sync with `src/routes/` when endpoints change.*
