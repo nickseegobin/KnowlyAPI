@@ -357,7 +357,7 @@ router.post('/complete-progression', requireServerKey, async (req, res) => {
 
   if (error) {
     console.error('[quest/complete-progression] Supabase error:', error);
-    return res.status(500).json({ error: 'Failed to record progression', code: 'server_error', details: error.message, hint: error.hint });
+    return res.status(500).json({ error: 'Failed to record progression', code: 'server_error' });
   }
 
   console.log(`[quest/complete-progression] session=${session_id} user=${user_id} topic="${topic}" level=${level}`);
