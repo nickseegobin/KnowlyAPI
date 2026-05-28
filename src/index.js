@@ -33,6 +33,7 @@ const trialStartRouter         = require('./routes/trialStart');
 const progressionRouter        = require('./routes/progression');
 const trialPacksRouter         = require('./routes/trialPacks');
 const submitPackExamRouter     = require('./routes/submitPackExam');
+const badgeRouter              = require('./routes/badge');
 
 
 
@@ -62,6 +63,7 @@ app.use('/api/v1/trial',             trialStartRouter);
 app.use('/api/v1/progression',       progressionRouter);
 app.use('/api/v1/trial-packs',       trialPacksRouter);
 app.use('/api/v1/submit-pack-exam',  submitPackExamRouter);
+app.use('/api/v1/badge',             badgeRouter);
 
 
 // 404 handler
