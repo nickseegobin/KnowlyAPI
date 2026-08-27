@@ -395,11 +395,19 @@ router.post('/sync', requireServerKey, async (req, res) => {
     if (error) throw error;
 
     if (!rows || !rows.length) {
-      return res.json({ synced: 0, failed: 0, total: 0, message: 'No active topics matched the filter.' });
+      return res.json({ synced: 0, failed: 0, total: 0, queued: false, message: 'No active topics matched the filter.' });
     }
 
-    const result = await bulkSyncTopics(rows);
-    return res.json(result);
+    // Fire-and-forget: with retry+backoff, a scope of more than a handful of
+    // topics can take well past a typical HTTP client timeout (WP's own
+    // wp_remote_post caps at 120s). Respond immediately and run the bulk
+    // sync in the background, same pattern as questionBank.js's replenish.
+    res.json({ queued: true, total: rows.length });
+
+    setImmediate(async () => {
+      const result = await bulkSyncTopics(rows);
+      console.log(`[curriculum-topics/sync] background sync done: ${result.synced} synced, ${result.failed} failed of ${result.total}`);
+    });
 
   } catch (err) {
     console.error('[curriculum-topics/sync] error:', err.message);
