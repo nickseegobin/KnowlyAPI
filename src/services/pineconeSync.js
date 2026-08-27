@@ -63,19 +63,40 @@ async function removeTopicVector(topicId) {
   return vid;
 }
 
-// Bulk-upsert an array of curriculum_topics rows. Continues on individual errors.
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Upsert with retry — Voyage's embedding API rate-limits under sustained
+// sequential calls with no backoff of its own; a bare bulk loop over more
+// than a handful of rows sees the tail fail with no way to recover.
+async function syncTopicWithRetry(row, maxAttempts = 3) {
+  let lastErr;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await syncTopic(row);
+    } catch (err) {
+      lastErr = err;
+      if (attempt < maxAttempts) await sleep(500 * attempt);
+    }
+  }
+  throw lastErr;
+}
+
+// Bulk-upsert an array of curriculum_topics rows. Continues on individual
+// errors (with retry+backoff per row) and a small pause between rows so a
+// large scope doesn't blow through the embedding API's rate limit.
 async function bulkSyncTopics(rows) {
   let synced = 0;
   let failed = 0;
 
   for (const row of rows) {
     try {
-      await syncTopic(row);
+      await syncTopicWithRetry(row);
       synced++;
     } catch (err) {
       console.error(`[pineconeSync] bulk: failed id=${row.id} — ${err.message}`);
       failed++;
     }
+    await sleep(150);
   }
 
   console.log(`[pineconeSync] bulk done: ${synced} synced, ${failed} failed of ${rows.length}`);
