@@ -235,7 +235,7 @@ router.delete('/:id', requireServerKey, async (req, res) => {
 // Body: { curriculum, level, period, subject,
 //         rows: [{ module_number, module_title, topic, sort_order }] }
 router.post('/import', requireServerKey, async (req, res) => {
-  const { curriculum = 'tt_primary', level, period = null, subject, rows = [] } = req.body;
+  const { curriculum = 'tt_primary', level, period = null, subject, rows = [], dry_run = false } = req.body;
 
   if (!level || !subject) {
     return res.status(400).json({ error: 'level and subject are required', code: 'missing_fields' });
@@ -266,10 +266,16 @@ router.post('/import', requireServerKey, async (req, res) => {
 
   let created = 0, updated = 0, archived = 0;
   const savedRows = [];
+  const invalidRows = [];
+  const toCreate = [];
+  const toUpdate = [];
 
   for (let i = 0; i < rows.length; i++) {
     const { module_number, module_title, topic, sort_order } = rows[i];
-    if (!topic || !topic.trim()) continue;
+    if (!topic || !topic.trim()) {
+      invalidRows.push({ row: i + 1, reason: 'Missing topic' });
+      continue;
+    }
 
     const key        = topic.toLowerCase().trim();
     const existing_r = existingByTopic.get(key);
@@ -286,6 +292,12 @@ router.post('/import', requireServerKey, async (req, res) => {
       source:        'csv',
       status:        'active',
     };
+
+    if (dry_run) {
+      if (existing_r) { toUpdate.push(topic.trim()); updated++; }
+      else             { toCreate.push(topic.trim()); created++; }
+      continue;
+    }
 
     if (existing_r) {
       const { data, error } = await supabase
@@ -313,13 +325,31 @@ router.post('/import', requireServerKey, async (req, res) => {
     }
   }
 
-  // Archive rows in this scope NOT present in the new set
+  // Rows in this scope NOT present in the new set — archived for real,
+  // or just reported as "would archive" for dry_run.
+  const toArchive = [];
   for (const [topicKey, row] of existingByTopic) {
     if (!newTopicKeys.has(topicKey)) {
-      await supabase.from('curriculum_topics').update({ status: 'archived' }).eq('id', row.id);
-      fireRemoveTopic(row.id);
+      if (dry_run) {
+        toArchive.push(row.topic);
+      } else {
+        await supabase.from('curriculum_topics').update({ status: 'archived' }).eq('id', row.id);
+        fireRemoveTopic(row.id);
+      }
       archived++;
     }
+  }
+
+  if (dry_run) {
+    return res.json({
+      dry_run: true,
+      created, updated, archived,
+      to_create:    toCreate,
+      to_update:    toUpdate,
+      to_archive:   toArchive,
+      invalid_rows: invalidRows,
+      total:        rows.length,
+    });
   }
 
   // Sync all upserted rows to Pinecone (ct-* vectors)
@@ -332,6 +362,7 @@ router.post('/import', requireServerKey, async (req, res) => {
     synced_to_pinecone: syncResult.synced,
     pinecone_failed:    syncResult.failed,
     total:              rows.length,
+    invalid_rows:       invalidRows,
   });
 });
 
