@@ -17,4 +17,12 @@ async function getEmbedding(text) {
   return response.data[0].embedding;
 }
 
-module.exports = { getEmbedding };
+async function getEmbeddings(texts) {
+  if (!texts.length) return [];
+  const response = await getVoyage().embed({ input: texts, model: 'voyage-3' });
+  const rows = [...response.data].sort((a, b) => a.index - b.index);
+  if (rows.length !== texts.length) throw new Error('Incomplete embedding batch');
+  return rows.map(row => row.embedding);
+}
+
+module.exports = { getEmbedding, getEmbeddings };

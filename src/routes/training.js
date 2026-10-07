@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getIndex } = require('../services/pinecone');
-const { getEmbedding } = require('../services/embeddings');
+const { getEmbedding, getEmbeddings } = require('../services/embeddings');
 
 function slugify(str) {
   return String(str).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
@@ -192,40 +192,32 @@ router.post('/import', requireServerKey, async (req, res) => {
 
   let synced = 0, failed = 0;
   const errors = [];
-
-  for (const row of rows) {
-    const { curriculum, level, period, subject, module_title, topic, content } = row;
-
-    if (!curriculum || !level || !subject || !topic || !content) {
-      errors.push({ topic: topic || '(unknown)', error: 'Missing required fields' });
-      failed++;
-      continue;
-    }
-
-    const vid = `tm-${curriculum}-${level}-${subject}-${slugify(topic)}`;
-
+  const valid = rows.filter(row => {
+    if (row.curriculum && row.level && row.subject && row.topic && row.content) return true;
+    failed++;
+    errors.push({ topic: row.topic || '(unknown)', error: 'Missing required fields' });
+    return false;
+  });
+  // One Voyage request per small batch instead of one per topic.
+  // Callers can retry safely: stable vector IDs upsert the same records.
+  for (let offset = 0; offset < valid.length; offset += 10) {
+    const batch = valid.slice(offset, offset + 10);
     try {
-      const embedding = await getEmbedding(content);
-      const index = getIndex();
-      await index.upsert({ records: [{
-        id:     vid,
-        values: embedding,
+      const embeddings = await getEmbeddings(batch.map(row => row.content));
+      const records = batch.map((row, i) => ({
+        id: `tm-${row.curriculum}-${row.level}-${row.subject}-${slugify(row.topic)}`,
+        values: embeddings[i],
         metadata: {
-          curriculum,
-          level,
-          period:       period       || null,
-          subject,
-          topic,
-          module_title: module_title || null,
-          text:         content,
+          curriculum: row.curriculum, level: row.level, period: row.period || null,
+          subject: row.subject, topic: row.topic, module_title: row.module_title || null,
+          text: row.content,
         },
-      }] });
-      console.log(`[training/import] upserted ${vid}`);
-      synced++;
+      }));
+      await getIndex().upsert({ records });
+      synced += batch.length;
     } catch (err) {
-      console.error(`[training/import] failed "${topic}": ${err.message}`);
-      errors.push({ topic, error: err.message });
-      failed++;
+      failed += batch.length;
+      batch.forEach(row => errors.push({ topic: row.topic, error: err.message }));
     }
   }
 
