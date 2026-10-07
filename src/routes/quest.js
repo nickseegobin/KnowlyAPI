@@ -1,7 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const { authenticateToken } = require('../middleware/auth');
-const { generateQuestContent, storeQuest } = require('../services/questGenerator');
+const { generateQuestContent, storeQuest, getCurriculumChunks } = require('../services/questGenerator');
 const { generateContent } = require('../services/ai');
 const { PROMPTS }         = require('../config/prompts');
 const getSupabase = require('../config/supabase');
@@ -676,7 +676,7 @@ router.post('/generate-questions', requireServerKey, async (req, res) => {
       level, period, subject,
       moduleTitle: module_title,
       topics: topics.length ? topics : [module_title],
-      curriculumChunks: '',
+      curriculumChunks: await getCurriculumChunks(curriculum, level, subject, period, module_title, true),
     });
 
     const raw    = await generateContent(prompt, { maxTokens: 2000 });

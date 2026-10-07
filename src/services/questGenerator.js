@@ -16,14 +16,17 @@ const getSupabase = require('../config/supabase');
 
 // ── Pinecone RAG ──────────────────────────────────────────────────────────────
 
-async function getCurriculumChunks(curriculum, level, subject, period, topicHint) {
+async function getCurriculumChunks(curriculum, level, subject, period, topicHint, moduleScoped = false) {
   try {
     const queryText = `${curriculum} ${level} ${subject} ${period || ''} ${topicHint || ''} learning objectives curriculum`.trim();
     const embedding = await getEmbedding(queryText);
     const index = getIndex();
     const filter = { curriculum, level, subject };
     if (period)     filter.period = period;
-    if (topicHint)  filter.topic  = topicHint;
+    if (topicHint) {
+      if (moduleScoped) filter.$or = [{ module_title: topicHint }, { subtopic: topicHint }];
+      else filter.topic = topicHint;
+    }
     const results = await index.query({ vector: embedding, topK: 10, filter, includeMetadata: true });
     return results.matches.map(m => m.metadata?.text || '').filter(Boolean).join('\n\n');
   } catch (err) {
@@ -111,7 +114,7 @@ async function generateQuestContent({
 
   const questId        = buildQuestId(curriculum, level, period, subject, module_number, topic, subtopic);
   const topicHint      = subtopic || topic || module_title;
-  const curriculumChunks = await getCurriculumChunks(curriculum, level, subject, period, topicHint);
+  const curriculumChunks = await getCurriculumChunks(curriculum, level, subject, period, topicHint, !subtopic && !topic);
 
   const prompt = PROMPTS[curriculum].quest({
     level,
@@ -186,4 +189,4 @@ async function storeQuest({ questId, questData, status = 'approved', sortOrder =
   return data;
 }
 
-module.exports = { generateQuestContent, storeQuest };
+module.exports = { generateQuestContent, storeQuest, getCurriculumChunks };
